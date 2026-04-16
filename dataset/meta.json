@@ -1,0 +1,1 @@
+{"input_dim": 70, "num_classes": 14, "classes": ["VPN_Bittorrent", "VPN_Chat1a", "VPN_Chat1b", "VPN_Email2a", "VPN_Email2b", "VPN_Facebook_Audio2a", "VPN_Facebook_Chat1a", "VPN_Facebook_Chat1b", "VPN_Ftps_A", "VPN_Ftps_B", "VPN_Hangouts_Audio1", "VPN_Hangouts_Audio2", "VPN_Hangouts_Chat1a", "VPN_Hangouts_Chat1b"], "total_training_samples": 8866}
