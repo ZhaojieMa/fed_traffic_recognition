@@ -1,0 +1,15 @@
+# 忽略虚拟环境
+.venv/
+__pycache__/
+
+# 忽略 PyCharm 配置
+.idea/
+
+# 忽略数据集和结果文件夹
+dataset/
+results/
+
+# 忽略 Python 编译文件
+*.pyc
+*.pyo
+*.pyd

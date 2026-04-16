@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class TrafficMLP(nn.Module):
     def __init__(self, input_dim, num_classes):
@@ -19,37 +20,38 @@ def fedprox_loss(outputs, labels, model, global_model, mu=0.1):
     prox_loss = sum((p - g_p).norm(2) ** 2 for p, g_p in zip(model.parameters(), global_model.parameters()))
     return ce_loss + (mu / 2) * prox_loss
 
-
 def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.1):
     device = outputs.device
     num_classes = outputs.shape[1]
 
-    # 1. 缩短 Warmup，让模型在前 20% 的轮次快速进入稳定状态
-    warmup_progress = min(1.0, current_round / (total_rounds * 0.2))
-    tau = 1.0 * warmup_progress
+    # ================= 1. 余弦温启动策略 =================
+    # 前 30% 的轮次平滑启动，解决原版前期表现垫底的问题
+    progress = min(1.0, current_round / (total_rounds * 0.3))
+    # 使用余弦函数实现 0 到 1 的丝滑过渡
+    tau = 0.5 * (1.0 - math.cos(progress * math.pi))
 
-    # 2. 改进分布估计：引入“全局偏见修正”
-    # 核心：使用更强的平滑，不再让 pi_y 占据主导，特别是针对本地没有的类
-    # 逻辑：如果本地没有该类，我们给它一个更接近均匀分布的预期，而不是极小的惩罚值
+    # ================= 2. 动态退火分布平滑 =================
     pi_y = label_dist.to(device)
+    # smooth_factor 随训练进行从 0.6 线性衰减到 0.1
+    # 前期强平滑抑制噪声，后期弱平滑信任真实的长尾分布
+    smooth_factor = 0.5 * (1.0 - progress) + 0.1
+    refined_prior = (1.0 - smooth_factor) * pi_y + smooth_factor * (1.0 / num_classes)
+    log_prior = torch.log(refined_prior + 1e-8)
 
-    # 这里的 0.5 权重可以平衡本地特异性和全局一致性
-    refined_prior = 0.5 * pi_y + 0.5 * (1.0 / num_classes)
-    log_prior = torch.log(refined_prior)
-
-    # 3. Logit Adjustment 修正：只对当前 Batch 中存在的类别进行边际增强
-    # 这样可以防止缺失类在本地梯度更新中产生噪声
+    # ================= 3. Logit 调整 =================
     adjusted_logits = outputs + tau * log_prior
-
     ce_loss = F.cross_entropy(adjusted_logits, labels)
 
-    # 4. 动态 Proximal 项：前期 Mu 稍大以保证一致性，后期减小以允许个性化
+    # ================= 4. 自适应 Proximal 约束 =================
     if global_model is None:
         return ce_loss
 
-    # 这里的 mu 使用传入的 MU_ADA (0.1)
+    # 核心创新：在 mu 的基础值上进行退火。
+    # 前期约束强 (mu_t ≈ mu)，强制模型对齐全局；后期约束弱 (mu_t ≈ mu * 0.5)，允许模型个性化学习长尾特征
+    dynamic_mu = mu * (1.0 - 0.5 * (current_round / total_rounds))
+
     prox_loss = 0.0
     for p, g_p in zip(model.parameters(), global_model.parameters()):
         prox_loss += (p - g_p).norm(2) ** 2
 
-    return ce_loss + (mu / 2) * prox_loss
+    return ce_loss + (dynamic_mu / 2) * prox_loss

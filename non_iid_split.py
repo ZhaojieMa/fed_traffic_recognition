@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 
 
 def simple_dirichlet_split(y, num_clients, alpha=0.5):
-    """标准的 Dirichlet 划分（不加任何平滑和噪声）"""
+    """标准的 Dirichlet 划分（对照组使用）"""
     num_classes = len(np.unique(y))
     client_data_idx = [[] for _ in range(num_clients)]
     for k in range(num_classes):
@@ -28,32 +28,66 @@ def simple_dirichlet_split(y, num_clients, alpha=0.5):
     return client_data_idx
 
 
+def realistic_traffic_split(y, num_clients, alpha=0.1, noise_ratio=0.03):
+    """
+    【本文核心构造】真实流量混合划分：高度个性化主应用 + 全局微量背景底噪
+    noise_ratio: 提取 3% 作为全局共享背景流量
+    """
+    num_classes = len(np.unique(y))
+    client_data_idx = [[] for _ in range(num_clients)]
+
+    # 区分主体流量和背景噪声
+    indices = np.arange(len(y))
+    np.random.shuffle(indices)
+
+    noise_size = int(len(y) * noise_ratio)
+    noise_idx = indices[:noise_size]
+    main_idx = indices[noise_size:]
+
+    # 1. 主体流量：使用极端的 Dirichlet (模拟用户的极端应用偏好)
+    y_main = y[main_idx]
+    for k in range(num_classes):
+        idx_k = np.where(y_main == k)[0]
+        real_idx_k = main_idx[idx_k]
+        np.random.shuffle(real_idx_k)
+        if len(real_idx_k) == 0: continue
+
+        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+        counts = (proportions * len(real_idx_k)).astype(int)
+        diff = len(real_idx_k) - counts.sum()
+        for i in range(diff): counts[i % num_clients] += 1
+
+        pos = 0
+        for i in range(num_clients):
+            client_data_idx[i].extend(real_idx_k[pos: pos + counts[i]].tolist())
+            pos += counts[i]
+
+    # 2. 背景噪声：均匀分配给所有客户端 (模拟全局底层微量通信，如DNS探测)
+    # 这从物理层面防止了本地类概率绝对为0导致的数学崩溃
+    chunks = np.array_split(noise_idx, num_clients)
+    for i in range(num_clients):
+        client_data_idx[i].extend(chunks[i].tolist())
+        np.random.shuffle(client_data_idx[i])
+
+    return client_data_idx
+
+
 def make_global_long_tail(df, total_samples=10000, zipf_alpha=1.5):
-    """
-    使用 Zipf 定律构造更贴近真实互联网流量的长尾分布
-    zipf_alpha: 越大幅度越极端，建议 1.2 - 1.5 之间
-    """
+    """使用 Zipf 定律构造全局长尾"""
     class_counts = df['label'].value_counts().sort_values(ascending=False)
     classes = class_counts.index.tolist()
     num_classes = len(classes)
 
-    # 生成 Zipf 权重
     ranks = np.arange(1, num_classes + 1)
     weights = 1.0 / (ranks ** zipf_alpha)
     probabilities = weights / weights.sum()
 
     sampled_dfs = []
     for i, cls in enumerate(classes):
-        # 计算该类理论应分得的样本数
         expected_n = int(total_samples * probabilities[i])
-
-        # 获取该类实际拥有的样本数
         cls_df = df[df['label'] == cls]
         cls_available = len(cls_df)
-
-        # 确定最终采样数：不能超过拥有数，且尾部类别至少保留3-5个样本以防消失
         n = max(min(expected_n, cls_available), 3)
-
         sampled_dfs.append(cls_df.sample(n=n, random_state=42))
 
     return pd.concat(sampled_dfs).sample(frac=1.0, random_state=42)
@@ -71,40 +105,29 @@ if __name__ == "__main__":
     le = LabelEncoder()
     df['label'] = le.fit_transform(df['label'].astype(str))
 
-    # 1. 划分基础训练集和测试集
     train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df['label'])
 
-    # 归一化处理
     scaler = StandardScaler()
     train_df[feature_cols] = scaler.fit_transform(train_df[feature_cols])
     test_df[feature_cols] = scaler.transform(test_df[feature_cols])
     test_df.to_csv("./dataset/global_test.csv", index=False)
 
-    # ================= 动态样本量设定逻辑 =================
-    # 建议论文使用量级：10000 - 20000 条。
-    # 这里设定目标为 12000，或者原始训练集的 80%（防止数据集本身很小的情况）
     TARGET_TOTAL = 12000
     TOTAL_SAMPLES_TO_USE = min(TARGET_TOTAL, int(len(train_df) * 0.8))
-
-    # 设定长尾系数：1.2 相比 1.5 更温和，样本量大时能让尾部类学到更多特征
     ZIPF_ALPHA = 1.5
-    # ====================================================
 
     num_clients = 10
     alphas = [0.1]
     num_classes = len(le.classes_)
 
-    # 1. 生成 RWTH (实验组：全局长尾异构数据池)
     train_df_rwth = make_global_long_tail(train_df, total_samples=TOTAL_SAMPLES_TO_USE, zipf_alpha=ZIPF_ALPHA)
-
-    # 2. 生成 Simple (对照组：随机抽样同样的数量，保证公平对比)
     train_df_simple = train_df.sample(n=len(train_df_rwth), random_state=42)
 
     for alpha in alphas:
-        # 分别在两个池子上执行 Dirichlet 划分
         splits = {
             "simple": (train_df_simple, simple_dirichlet_split(train_df_simple['label'].values, num_clients, alpha)),
-            "rwth": (train_df_rwth, simple_dirichlet_split(train_df_rwth['label'].values, num_clients, alpha))
+            # 实验组：应用本文设计的真实流量混合划分！
+            "rwth": (train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.03))
         }
 
         for split_type, (base_df, client_indices) in splits.items():
@@ -115,7 +138,6 @@ if __name__ == "__main__":
                 client_df = base_df.iloc[client_indices[c]]
                 client_df.to_csv(f"{save_dir}/client_{c}.csv", index=False)
 
-                # 记录真实的本地分布：不加任何平滑！让0保持为0！
                 counts = client_df['label'].value_counts()
                 dist = np.zeros(num_classes)
                 total_samples_client = len(client_df)
@@ -135,7 +157,4 @@ if __name__ == "__main__":
             "total_training_samples": len(train_df_rwth)
         }, f)
 
-    print(f"数据划分成功！")
-    print(f"原始数据总量: {len(df)}")
-    print(f"最终实验选用的总样本量: {len(train_df_rwth)}")
-    print(f"划分模式: Simple组 vs RWTH组(Zipf Alpha={ZIPF_ALPHA})")
+    print(f"数据划分成功！模式: Simple组 vs RWTH混合真实组(Zipf={ZIPF_ALPHA})")
