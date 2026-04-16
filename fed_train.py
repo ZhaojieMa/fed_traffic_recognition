@@ -205,8 +205,10 @@ if __name__ == "__main__":
         # 1. 运行 Simple (控制变量组：只有类别不均，没有长尾缺失)
         sa_acc, sa_f1, sa_hist = run_experiment("FedAvg", alpha, "simple")
         sp_acc, sp_f1, sp_hist = run_experiment("FedProx", alpha, "simple")
+        so_acc, so_f1, so_hist = run_experiment("Proposed", alpha, "simple")
         summary[str(alpha)]["simple"]["FedAvg"] = {"acc": sa_acc, "f1": sa_f1, "hist": sa_hist}
         summary[str(alpha)]["simple"]["FedProx"] = {"acc": sp_acc, "f1": sp_f1, "hist": sp_hist}
+        summary[str(alpha)]["simple"]["Proposed"] = {"acc": so_acc, "f1": so_f1, "hist": so_hist}
 
         # 2. 运行 RWTH (实验组：全局长尾 + 极端异构的双重地狱)
         l_acc, l_f1 = local_only_training(alpha, "rwth")

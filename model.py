@@ -20,38 +20,31 @@ def fedprox_loss(outputs, labels, model, global_model, mu=0.1):
     prox_loss = sum((p - g_p).norm(2) ** 2 for p, g_p in zip(model.parameters(), global_model.parameters()))
     return ce_loss + (mu / 2) * prox_loss
 
+
+# model.py 修复部分
 def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.1):
     device = outputs.device
-    num_classes = outputs.shape[1]
 
-    # ================= 1. 余弦温启动策略 =================
-    # 前 30% 的轮次平滑启动，解决原版前期表现垫底的问题
-    progress = min(1.0, current_round / (total_rounds * 0.3))
-    # 使用余弦函数实现 0 到 1 的丝滑过渡
-    tau = 0.5 * (1.0 - math.cos(progress * math.pi))
+    # 1. 动态温控 Tau (更激进的调整)
+    progress = current_round / total_rounds
+    tau = 1.0 if progress < 0.2 else (0.5 * (1.0 + math.cos(progress * math.pi)))
 
-    # ================= 2. 动态退火分布平滑 =================
+    # 2. 修正分布平滑：避免 log(0)，并引入全局先验补偿
+    # label_dist 是本地频率。对于本地缺失类，赋予一个极小的 epsilon
     pi_y = label_dist.to(device)
-    # smooth_factor 随训练进行从 0.6 线性衰减到 0.1
-    # 前期强平滑抑制噪声，后期弱平滑信任真实的长尾分布
-    smooth_factor = 0.5 * (1.0 - progress) + 0.1
-    refined_prior = (1.0 - smooth_factor) * pi_y + smooth_factor * (1.0 / num_classes)
-    log_prior = torch.log(refined_prior + 1e-8)
+    pi_y = torch.clamp(pi_y, min=1e-6)
 
-    # ================= 3. Logit 调整 =================
-    adjusted_logits = outputs + tau * log_prior
-    ce_loss = F.cross_entropy(adjusted_logits, labels)
+    # 3. Logit Adjustment 核心公式修复
+    # 逻辑：本地越少的类，惩罚越大，强制模型在全局聚合时更关注这些类的特征
+    logit_adjustment = tau * torch.log(pi_y)
+    adjusted_outputs = outputs + logit_adjustment
 
-    # ================= 4. 自适应 Proximal 约束 =================
-    if global_model is None:
-        return ce_loss
+    ce_loss = F.cross_entropy(adjusted_outputs, labels)
 
-    # 核心创新：在 mu 的基础值上进行退火。
-    # 前期约束强 (mu_t ≈ mu)，强制模型对齐全局；后期约束弱 (mu_t ≈ mu * 0.5)，允许模型个性化学习长尾特征
-    dynamic_mu = mu * (1.0 - 0.5 * (current_round / total_rounds))
+    # 4. 配合 FedProx 的近端项防止本地模型跑飞
+    prox_loss = 0
+    if global_model is not None:
+        for p, g_p in zip(model.parameters(), global_model.parameters()):
+            prox_loss += (p - g_p).norm(2) ** 2
 
-    prox_loss = 0.0
-    for p, g_p in zip(model.parameters(), global_model.parameters()):
-        prox_loss += (p - g_p).norm(2) ** 2
-
-    return ce_loss + (dynamic_mu / 2) * prox_loss
+    return ce_loss + (mu / 2) * prox_loss

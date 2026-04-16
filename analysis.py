@@ -135,6 +135,60 @@ def plot_classic_bar(data, alpha="0.1"):
     plt.savefig("./results/accuracy_comparison.png", dpi=300)
 
 
+def plot_degradation_and_advantage(data, alpha="0.1"):
+    """
+    【新增图表】图5：性能断崖验证与抗性对比
+    要求2和要求3的核心证明：展示算法在单纯Dirichlet到本文RWTH构造下的性能下降幅度，
+    凸显本文方法在极限异构下的显著优势。
+    """
+    methods = ["FedAvg", "FedProx", "Proposed (本文方法)"]
+    keys = ["FedAvg", "FedProx", "Proposed"]
+
+    # 提取两种环境下的准确率
+    acc_simple = [data[alpha]["simple"][k]["acc"] for k in keys]
+    acc_rwth = [data[alpha]["rwth"][k]["acc"] for k in keys]
+
+    x = np.arange(len(methods))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # 绘制分组柱状图
+    rects1 = ax.bar(x - width / 2, acc_simple, width, label='单纯 Dirichlet', color='#95a5a6',
+                    edgecolor='black')
+    rects2 = ax.bar(x + width / 2, acc_rwth, width, label='本文 RWTH 划分', color='#e74c3c',
+                    edgecolor='black')
+
+    # 计算并标注性能下降幅度 (Performance Drop)
+    for i in range(len(methods)):
+        drop_val = acc_simple[i] - acc_rwth[i]
+        drop_pct = (drop_val / acc_simple[i]) * 100
+
+        # 在高柱子上标单纯值
+        ax.text(x[i] - width / 2, acc_simple[i] + 0.01, f'{acc_simple[i]:.3f}', ha='center', va='bottom', fontsize=10)
+        # 在矮柱子上标RWTH值
+        ax.text(x[i] + width / 2, acc_rwth[i] + 0.01, f'{acc_rwth[i]:.3f}', ha='center', va='bottom', fontsize=10)
+
+        # 标注下降箭头和百分比
+        font_weight = 'bold' if keys[i] == "Proposed" else 'normal'
+        color = 'darkgreen' if keys[i] == "Proposed" else 'darkred'
+        ax.text(x[i] + width / 2, acc_rwth[i] - 0.08, f'↓ 掉点 {drop_pct:.1f}%', ha='center', va='bottom', color=color,
+                fontweight=font_weight, fontsize=11)
+
+    ax.set_ylabel('全局测试集准确率 (Accuracy)', fontsize=12)
+    ax.set_title(
+        f'图5：数据挑战升级对算法性能的冲击对比 (α={alpha})\n(证明在极限恶劣环境下，本文方法性能衰减最小，优势被显著放大)',
+        fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods, fontsize=12)
+    ax.legend(loc='upper right', fontsize=11)
+    ax.set_ylim(0, 1.15)  # 留出顶部空间给文本
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig("./results/plot5_degradation.png", dpi=300)
+
+
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     data = load_data()
@@ -147,5 +201,6 @@ if __name__ == "__main__":
     plot_heatmap(target_alpha)
     plot_histogram_and_coverage(target_alpha)
     plot_convergence(data, target_alpha)
+    plot_degradation_and_advantage(data, target_alpha)
 
     print("\n所有图表生成完毕，请检查 ./results 文件夹！")
