@@ -34,31 +34,32 @@ def extract_flow_features(pcap_path, label):
 
 
 if __name__ == "__main__":
-    pcap_files = {
-        "D:/VPN-PCAPS-01/vpn_aim_chat1a.pcap": "VPN_Chat1a",
-        "D:/VPN-PCAPS-01/vpn_aim_chat1b.pcap": "VPN_Chat1b",
-        "D:/VPN-PCAPs-01/vpn_bittorrent.pcap": "VPN_Bittorrent",
-        "D:/VPN-PCAPs-01/vpn_email2a.pcap": "VPN_Email2a",
-        "D:/VPN-PCAPs-01/vpn_email2b.pcap": "VPN_Email2b",
-        "D:/VPN-PCAPs-01/vpn_facebook_audio2.pcap": "VPN_Facebook_Audio2a",
-        "D:/VPN-PCAPs-01/vpn_facebook_chat1a.pcap": "VPN_Facebook_Chat1a",
-        "D:/VPN-PCAPs-01/vpn_facebook_chat1b.pcap": "VPN_Facebook_Chat1b",
-        "D:/VPN-PCAPs-01/vpn_ftps_A.pcap": "VPN_Ftps_A",
-        "D:/VPN-PCAPs-01/vpn_ftps_B.pcap": "VPN_Ftps_B",
-        "D:/VPN-PCAPs-01/vpn_hangouts_audio1.pcap": "VPN_Hangouts_Audio1",
-        "D:/VPN-PCAPs-01/vpn_hangouts_audio2.pcap": "VPN_Hangouts_Audio2",
-        "D:/VPN-PCAPs-01/vpn_hangouts_chat1a.pcap": "VPN_Hangouts_Chat1a",
-        "D:/VPN-PCAPs-01/vpn_hangouts_chat1b.pcap": "VPN_Hangouts_Chat1b",
-    }
+    pcap_root_dir = "D:/VPN-PCAPs-01"
 
     all_features = []
-    for pcap_path, label in pcap_files.items():
-        if os.path.exists(pcap_path):
+
+    # 2. 自动遍历目录下所有文件
+    if os.path.exists(pcap_root_dir):
+        # 获取目录下所有以 .pcap 结尾的文件
+        pcap_files = [f for f in os.listdir(pcap_root_dir) if f.endswith('.pcap')]
+
+        print(f"在目录 {pcap_root_dir} 中找到 {len(pcap_files)} 个 PCAP 文件。")
+
+        for file_name in pcap_files:
+            # 构建完整的文件路径
+            pcap_path = os.path.join(pcap_root_dir, file_name)
+
+            # 自动生成标签：例如 "vpn_aim_chat1a.pcap" -> "vpn_aim_chat1a"
+            # 你也可以根据需要使用 split('_') 等进一步简化标签
+            label = os.path.splitext(file_name)[0]
+
+            print(f"正在处理: {file_name} (标签: {label})")
+
             df = extract_flow_features(pcap_path, label)
             if not df.empty:
                 all_features.append(df)
-        else:
-            print(f"警告: 找不到文件 {pcap_path}")
+    else:
+        print(f"错误: 找不到目录 {pcap_root_dir}")
 
     if all_features:
         final_df = pd.concat(all_features, ignore_index=True)
