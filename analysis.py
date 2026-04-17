@@ -89,24 +89,44 @@ def plot_histogram_and_coverage(alpha="0.1"):
 
 
 def plot_convergence(data, alpha="0.1"):
-    hist_simple = data[alpha]["simple"]["FedAvg"]["hist"]
-    hist_prop_avg = data[alpha]["rwth"]["FedAvg"]["hist"] # 修改此处
-    hist_prop_prox = data[alpha]["rwth"]["FedProx"]["hist"] # 修改此处
-    hist_prop_alg = data[alpha]["rwth"]["Proposed"]["hist"] # 修改此处
+    """
+    图4：六条曲线收敛对比图
+    展示 FedAvg, FedProx, Proposed 在 Simple 和 RWTH 两种环境下的收敛与抗衰减能力
+    """
+    # 提取 Simple 环境数据
+    hist_simple_avg = data[alpha]["simple"]["FedAvg"]["hist"]
+    hist_simple_prox = data[alpha]["simple"]["FedProx"]["hist"]
+    hist_simple_prop = data[alpha]["simple"]["Proposed"]["hist"]
 
-    plt.figure(figsize=(10, 6))
-    rounds = range(1, len(hist_simple) + 1)
+    # 提取 RWTH 环境数据
+    hist_rwth_avg = data[alpha]["rwth"]["FedAvg"]["hist"]
+    hist_rwth_prox = data[alpha]["rwth"]["FedProx"]["hist"]
+    hist_rwth_prop = data[alpha]["rwth"]["Proposed"]["hist"]
 
-    plt.plot(rounds, hist_simple, ':', color='#7f8c8d', linewidth=2, label="FedAvg (单纯 Dirichlet数据)")
-    plt.plot(rounds, hist_prop_avg, '--', color='#3498db', linewidth=2, alpha=0.8, label="FedAvg")
-    plt.plot(rounds, hist_prop_prox, '-.', color='#2ecc71', linewidth=2.5, alpha=0.9, label="FedProx")
-    plt.plot(rounds, hist_prop_alg, '-', color='#e74c3c', linewidth=3.5, label="本文方法 FedLC-Ada")
+    plt.figure(figsize=(12, 7))
+    rounds = range(1, len(hist_simple_avg) + 1)
 
-    plt.title(f"图4：RWTH 极限挑战下的收敛曲线对比 (α={alpha})", fontsize=15, fontweight='bold')
+    # ================= 1. 绘制 Simple 组 (对照组：虚线/点线，颜色稍浅) =================
+    plt.plot(rounds, hist_simple_avg, ':', color='#3498db', linewidth=2.5, alpha=0.6, label="FedAvg (单纯 Dirichlet)")
+    plt.plot(rounds, hist_simple_prox, ':', color='#2ecc71', linewidth=2.5, alpha=0.6, label="FedProx (单纯 Dirichlet)")
+    plt.plot(rounds, hist_simple_prop, ':', color='#e74c3c', linewidth=2.5, alpha=0.6,
+             label="Proposed (单纯 Dirichlet)")
+
+    # ================= 2. 绘制 RWTH 组 (实验组：实线，颜色加深加粗) =================
+    plt.plot(rounds, hist_rwth_avg, '-', color='#2980b9', linewidth=2, label="FedAvg (极限 RWTH)")
+    plt.plot(rounds, hist_rwth_prox, '-', color='#27ae60', linewidth=2, label="FedProx (极限 RWTH)")
+    plt.plot(rounds, hist_rwth_prop, '-', color='#c0392b', linewidth=3.5, label="本文方法 FedLC-Ada (极限 RWTH)")
+
+    plt.title(f"图4：不同数据异构程度下各算法的收敛曲线对比 (α={alpha})\n(实线 vs 虚线展示环境恶化带来的性能冲击)",
+              fontsize=15, fontweight='bold')
     plt.xlabel("通信轮数 (Rounds)", fontsize=12)
-    plt.ylabel("测试集准确率 (Accuracy)", fontsize=12)
-    plt.legend(loc='lower right', frameon=True, shadow=True)
+    plt.ylabel("全局测试集准确率 (Accuracy)", fontsize=12)
+
+    # 使用双列图例，方便左右对比
+    plt.legend(loc='lower right', ncol=2, frameon=True, shadow=True, fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
     plt.savefig("./results/plot4_convergence.png", dpi=300)
 
 

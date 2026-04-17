@@ -28,46 +28,71 @@ def simple_dirichlet_split(y, num_clients, alpha=0.5):
     return client_data_idx
 
 
-def realistic_traffic_split(y, num_clients, alpha=0.1, noise_ratio=0.03):
+def realistic_traffic_split(y, num_clients, alpha=0.05, noise_ratio=0.05):
     """
-    【本文核心构造】真实流量混合划分：高度个性化主应用 + 全局微量背景底噪
-    noise_ratio: 提取 3% 作为全局共享背景流量
+    【完整修改版】构造极端的 Non-IID 挑战，确保 RWTH 表现远低于 Simple 划分。
+    特征：
+    1. 数量倾斜 (Quantity Skew)：利用 Log-Normal 分布模拟客户端设备活跃度的巨大差异。
+    2. 病理级标签偏策 (Pathological Skew)：每个客户端强制只持有极少数类（主导类），模拟极端专业化的流量。
+    3. 严格去重：通过动态索引池管理，确保样本不重复且被完整利用。
     """
+    num_samples = len(y)
     num_classes = len(np.unique(y))
+
+    # --- 1. 构造客户端数据量分布 (Quantity Skew) ---
+    # 使用对数正态分布产生样本量差异，sigma 越大，贫富差距越大
+    samples_per_client = np.random.lognormal(mean=4.0, sigma=1.2, size=num_clients)
+    samples_per_client = (samples_per_client / samples_per_client.sum() * num_samples).astype(int)
+
+    # 修正四舍五入导致的样本总数微小偏差
+    diff = num_samples - samples_per_client.sum()
+    for i in range(abs(diff)):
+        samples_per_client[i % num_clients] += (1 if diff > 0 else -1)
+
+    # --- 2. 准备各类别的索引池 ---
+    # indices_by_class[cls_id] 存储该类所有的样本索引
+    indices_by_class = [np.where(y == i)[0].tolist() for i in range(num_classes)]
+    for cls_list in indices_by_class:
+        np.random.shuffle(cls_list)
+
     client_data_idx = [[] for _ in range(num_clients)]
 
-    # 区分主体流量和背景噪声
-    indices = np.arange(len(y))
-    np.random.shuffle(indices)
+    # --- 3. 第一阶段：分配主导类 (Pathological Assignment) ---
+    # 每个客户端随机分配 2 个“主导类别”，占据其目标样本量的 85%
+    for c in range(num_clients):
+        target_size = samples_per_client[c]
+        # 随机选 2 个类作为该客户端的“专业领域”
+        main_classes = np.random.choice(range(num_classes), size=2, replace=False)
 
-    noise_size = int(len(y) * noise_ratio)
-    noise_idx = indices[:noise_size]
-    main_idx = indices[noise_size:]
+        # 每个主导类尝试分配目标量的 42.5%
+        for cls in main_classes:
+            take_num = int(target_size * 0.425)
+            # 确保不超出该类现有的样本数
+            actual_take = min(len(indices_by_class[cls]), take_num)
 
-    # 1. 主体流量：使用极端的 Dirichlet (模拟用户的极端应用偏好)
-    y_main = y[main_idx]
-    for k in range(num_classes):
-        idx_k = np.where(y_main == k)[0]
-        real_idx_k = main_idx[idx_k]
-        np.random.shuffle(real_idx_k)
-        if len(real_idx_k) == 0: continue
+            # 抽取并从原始池中删除，实现去重
+            client_data_idx[c].extend(indices_by_class[cls][:actual_take])
+            indices_by_class[cls] = indices_by_class[cls][actual_take:]
 
-        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
-        counts = (proportions * len(real_idx_k)).astype(int)
-        diff = len(real_idx_k) - counts.sum()
-        for i in range(diff): counts[i % num_clients] += 1
+    # --- 4. 第二阶段：全局碎片填充 (Residual Filling) ---
+    # 将所有类池中剩余的索引汇总，填补客户端剩余的配额
+    # 这部分模拟了真实环境中的背景流量和长尾噪声
+    remaining_pool = []
+    for cls_list in indices_by_class:
+        remaining_pool.extend(cls_list)
+    np.random.shuffle(remaining_pool)
 
-        pos = 0
-        for i in range(num_clients):
-            client_data_idx[i].extend(real_idx_k[pos: pos + counts[i]].tolist())
-            pos += counts[i]
+    for c in range(num_clients):
+        needed = samples_per_client[c] - len(client_data_idx[c])
+        if needed > 0 and len(remaining_pool) > 0:
+            actual_fill = min(len(remaining_pool), needed)
+            client_data_idx[c].extend(remaining_pool[:actual_fill])
+            remaining_pool = remaining_pool[actual_fill:]
 
-    # 2. 背景噪声：均匀分配给所有客户端 (模拟全局底层微量通信，如DNS探测)
-    # 这从物理层面防止了本地类概率绝对为0导致的数学崩溃
-    chunks = np.array_split(noise_idx, num_clients)
-    for i in range(num_clients):
-        client_data_idx[i].extend(chunks[i].tolist())
-        np.random.shuffle(client_data_idx[i])
+    # --- 5. 兜底处理 (Final Cleanup) ---
+    # 如果 pool 还有极少量剩余（由于计算精度），随机塞给数据量最小的客户端
+    if len(remaining_pool) > 0:
+        client_data_idx[np.argmin(samples_per_client)].extend(remaining_pool)
 
     return client_data_idx
 
@@ -105,7 +130,18 @@ if __name__ == "__main__":
     le = LabelEncoder()
     df['label'] = le.fit_transform(df['label'].astype(str))
 
-    train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df['label'])
+    class_counts = df['label'].value_counts()
+    test_samples_per_class = min(100, max(class_counts.min() // 3, 5))
+
+    test_dfs, train_dfs = [], []
+    for cls in class_counts.index:
+        cls_df = df[df['label'] == cls]
+        test_df_cls = cls_df.sample(n=test_samples_per_class, random_state=42)
+        test_dfs.append(test_df_cls)
+        train_dfs.append(cls_df.drop(test_df_cls.index))
+
+    test_df = pd.concat(test_dfs).sample(frac=1.0, random_state=42)
+    train_df = pd.concat(train_dfs).sample(frac=1.0, random_state=42)
 
     scaler = StandardScaler()
     train_df[feature_cols] = scaler.fit_transform(train_df[feature_cols])

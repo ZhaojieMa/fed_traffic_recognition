@@ -25,23 +25,22 @@ def fedprox_loss(outputs, labels, model, global_model, mu=0.1):
 def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.1):
     device = outputs.device
 
-    # 1. 动态温控 Tau (更激进的调整)
-    progress = current_round / total_rounds
-    tau = 1.0 if progress < 0.2 else (0.5 * (1.0 + math.cos(progress * math.pi)))
+    # ================= 核心修复 2：废除归零退火 =================
+    # 在非独立同分布的长尾联邦学习中，一旦丢弃惩罚项，模型会立刻被本地大类重新带偏
+    # 改为全程使用恒定的 tau=1.0，给少见类提供最强力的保护伞！
+    tau = 1.0
 
-    # 2. 修正分布平滑：避免 log(0)，并引入全局先验补偿
-    # label_dist 是本地频率。对于本地缺失类，赋予一个极小的 epsilon
+    # 避免 log(0) 崩溃，1e-5 截断能提供约 -11.5 的强力惩罚对数值
     pi_y = label_dist.to(device)
-    pi_y = torch.clamp(pi_y, min=1e-6)
+    pi_y = torch.clamp(pi_y, min=1e-5)
 
-    # 3. Logit Adjustment 核心公式修复
-    # 逻辑：本地越少的类，惩罚越大，强制模型在全局聚合时更关注这些类的特征
+    # Logit Adjustment 逻辑：本地越少的类，惩罚对数越小（绝对值越大），
+    # 强迫模型在损失反馈时付出更大的梯度代价去拟合稀有类。
     logit_adjustment = tau * torch.log(pi_y)
     adjusted_outputs = outputs + logit_adjustment
 
     ce_loss = F.cross_entropy(adjusted_outputs, labels)
 
-    # 4. 配合 FedProx 的近端项防止本地模型跑飞
     prox_loss = 0
     if global_model is not None:
         for p, g_p in zip(model.parameters(), global_model.parameters()):

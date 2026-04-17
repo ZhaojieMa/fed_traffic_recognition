@@ -33,12 +33,12 @@ INPUT_DIM = META["input_dim"]
 NUM_CLASSES = META["num_classes"]
 
 NUM_CLIENTS = 10
-EPOCHS_PER_ROUND = 10
+EPOCHS_PER_ROUND = 5
 TOTAL_ROUNDS = 50
 BATCH_SIZE = 32
-LEARNING_RATE = 0.001  # 优化：降低学习率，防止在 Non-IID 下产生严重的客户端漂移 (Client Drift)
-MU_PROX = 0.1           # FedProx 专用 MU
-MU_ADA = 0.1           # 我们的方法专用的微小 MU
+LEARNING_RATE = 0.001
+MU_PROX = 0.01
+MU_ADA = 0.01
 
 
 def load_global_test():
