@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, f1_score
 import flwr as fl
 from collections import OrderedDict
-from model import TrafficMLP, fedprox_loss, fedlc_ada_loss
+from model import TrafficResNet, fedprox_loss, fedlc_ada_loss
 
 
 def seed_everything(seed=42):
@@ -34,7 +34,7 @@ NUM_CLASSES = META["num_classes"]
 
 NUM_CLIENTS = 10
 EPOCHS_PER_ROUND = 5
-TOTAL_ROUNDS = 50
+TOTAL_ROUNDS = 100    # 【核心修改】增加到 100 轮。联邦学习在复杂异构下收敛较慢，50 轮不足以让改进算法发力
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 MU_PROX = 0.01
@@ -66,7 +66,7 @@ class TrafficClient(fl.client.NumPyClient):
         self.method = method
         self.split_type = split_type
         self.X_train, self.y_train, self.label_dist = load_client_data(client_id, alpha, split_type)
-        self.model = TrafficMLP(INPUT_DIM, NUM_CLASSES).to(DEVICE)
+        self.model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
         self.optimizer = optim.AdamW(self.model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
     def get_parameters(self, config):
@@ -83,7 +83,7 @@ class TrafficClient(fl.client.NumPyClient):
 
         global_model = None
         if self.method in ["FedProx", "Proposed"]:
-            global_model = TrafficMLP(INPUT_DIM, NUM_CLASSES).to(DEVICE)
+            global_model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
             global_model.load_state_dict(self.model.state_dict())
             global_model.eval()
 
@@ -109,7 +109,7 @@ class TrafficClient(fl.client.NumPyClient):
 
 def get_evaluate_fn():
     def evaluate(server_round, parameters, config):
-        model = TrafficMLP(INPUT_DIM, NUM_CLASSES).to(DEVICE)
+        model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
         params_dict = zip(model.state_dict().keys(), parameters)
         model.load_state_dict(OrderedDict({k: torch.tensor(v).to(DEVICE) for k, v in params_dict}))
         model.eval()
@@ -150,7 +150,7 @@ def centralized_baseline(alpha, split_type="proposed"):
         all_y.append(y)
 
     loader = DataLoader(TensorDataset(torch.cat(all_x), torch.cat(all_y)), batch_size=BATCH_SIZE, shuffle=True,drop_last=True)
-    model = TrafficMLP(INPUT_DIM, NUM_CLASSES).to(DEVICE)
+    model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     model.train()
@@ -173,7 +173,7 @@ def local_only_training(alpha, split_type="proposed"):
     all_client_accs, all_client_f1s = [], []
     for i in range(NUM_CLIENTS):
         X, y, _ = load_client_data(i, alpha, split_type)
-        model = TrafficMLP(INPUT_DIM, NUM_CLASSES).to(DEVICE)
+        model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
         optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
         loader = DataLoader(TensorDataset(X, y), batch_size=BATCH_SIZE, shuffle=True,drop_last=True)
@@ -195,7 +195,7 @@ def local_only_training(alpha, split_type="proposed"):
 
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
-    alphas = [0.1]
+    alphas = [0.5]
     summary = {}
 
     for alpha in alphas:

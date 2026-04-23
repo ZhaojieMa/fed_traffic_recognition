@@ -15,7 +15,7 @@ def load_data():
         return json.load(f)
 
 
-def get_class_matrix(split_type, alpha="0.1", num_clients=10, num_classes=8):
+def get_class_matrix(split_type, alpha="0.5", num_clients=10, num_classes=8):
     """读取真实的CSV获取客户端类分布矩阵"""
     with open("./dataset/meta.json", "r") as f:
         num_classes = json.load(f)["num_classes"]
@@ -29,28 +29,45 @@ def get_class_matrix(split_type, alpha="0.1", num_clients=10, num_classes=8):
     return matrix
 
 
-def plot_heatmap(alpha="0.1"):
+def plot_heatmap(alpha="0.5"):
     mat_simple = get_class_matrix("simple", alpha)
-    mat_prop = get_class_matrix("rwth", alpha) # 修改此处
+    mat_rwth = get_class_matrix("rwth", alpha)
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    vmax_val = max(mat_simple.max(), mat_prop.max()) * 0.8
+    # 【核心修复】：取消按行归一化，改用 log1p 展现真实的数量级分布！
+    # 这样能一目了然地看到 RWTH 中哪些是海量数据的“核心节点”，哪些是几乎空载的“边缘节点”
+    mat_simple_log = np.log1p(mat_simple)
+    mat_rwth_log = np.log1p(mat_rwth)
 
-    sns.heatmap(mat_simple.T, ax=axes[0], cmap="YlOrRd", vmax=vmax_val, cbar_kws={'label': '样本数量'})
-    axes[0].set_title(f"单纯 Dirichlet (α={alpha})\n分布随机，整体数量相对均衡", fontweight='bold')
-    axes[0].set_xlabel("客户端 ID")
-    axes[0].set_ylabel("类别 ID")
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    sns.heatmap(mat_prop.T, ax=axes[1], cmap="YlOrRd", vmax=vmax_val, cbar_kws={'label': '样本数量'})
-    axes[1].set_title(f"本文 RWTH 划分 (α={alpha})\n全局长尾 + 极端稀缺孤岛 (最严酷测试)", fontweight='bold')
-    axes[1].set_xlabel("客户端 ID")
-    axes[1].set_ylabel("类别 ID")
+    # 统一全局刻度，凸显对比
+    vmin = 0
+    vmax = max(mat_simple_log.max(), mat_rwth_log.max())
+    cmap = sns.cubehelix_palette(start=.5, rot=-.5, as_cmap=True)
 
+    # 图1：对照组
+    sns.heatmap(mat_simple_log, ax=axes[0], cmap="YlGnBu", vmin=vmin, vmax=vmax,
+                linewidths=0.5, linecolor='gray', cbar_kws={'label': 'Log(样本数 + 1)'})
+    axes[0].set_title(f"对照组 (Simple): 纯 Dirichlet 分布 (α={alpha})\n各节点数据总量相近，仅标签倾斜", fontsize=14,
+                      fontweight='bold')
+    axes[0].set_xlabel("类别 (Class ID)", fontsize=12)
+    axes[0].set_ylabel("客户端 (Client ID)", fontsize=12)
+
+    # 图2：实验组
+    sns.heatmap(mat_rwth_log, ax=axes[1], cmap="YlGnBu", vmin=vmin, vmax=vmax,
+                linewidths=0.5, linecolor='gray', cbar_kws={'label': 'Log(样本数 + 1)'})
+    axes[1].set_title(f"实验组 (RWTH): 真实流量异构 (α={alpha})\n引入对数正态的数量崩溃，出现大量微型孤岛节点",
+                      fontsize=14, fontweight='bold')
+    axes[1].set_xlabel("类别 (Class ID)", fontsize=12)
+    axes[1].set_ylabel("客户端 (Client ID)", fontsize=12)
+
+    plt.suptitle("联邦学习数据异构挑战：单纯 Dirichlet vs 真实场景(RWTH) 的客户端绝对数据量分布对比", fontsize=16,
+                 fontweight='bold', y=1.05)
     plt.tight_layout()
-    plt.savefig("./results/plot1_heatmap.png", dpi=300)
+    plt.savefig(f"./results/plot1_heatmap_alpha_{alpha}.png", dpi=300, bbox_inches='tight')
 
 
-def plot_histogram_and_coverage(alpha="0.1"):
+def plot_histogram_and_coverage(alpha="0.5"):
     """图2 & 图3：数量分布与覆盖率"""
     mat_simple = get_class_matrix("simple", alpha)
     mat_prop = get_class_matrix("rwth", alpha)
@@ -88,7 +105,7 @@ def plot_histogram_and_coverage(alpha="0.1"):
     plt.savefig("./results/plot2_3_distribution.png", dpi=300)
 
 
-def plot_convergence(data, alpha="0.1"):
+def plot_convergence(data, alpha="0.5"):
     """
     图4：六条曲线收敛对比图
     展示 FedAvg, FedProx, Proposed 在 Simple 和 RWTH 两种环境下的收敛与抗衰减能力
@@ -130,7 +147,7 @@ def plot_convergence(data, alpha="0.1"):
     plt.savefig("./results/plot4_convergence.png", dpi=300)
 
 
-def plot_classic_bar(data, alpha="0.1"):
+def plot_classic_bar(data, alpha="0.5"):
     """原版柱状图修复"""
     methods = ["本地独立", "FedAvg", "FedProx", "本文方法(FedLC-Ada)", "集中式(上限)"]
     keys = ["Local", "FedAvg", "FedProx", "Proposed", "Centralized"]
@@ -155,11 +172,10 @@ def plot_classic_bar(data, alpha="0.1"):
     plt.savefig("./results/accuracy_comparison.png", dpi=300)
 
 
-def plot_degradation_and_advantage(data, alpha="0.1"):
+def plot_degradation_and_advantage(data, alpha="0.5"):
     """
     【新增图表】图5：性能断崖验证与抗性对比
-    要求2和要求3的核心证明：展示算法在单纯Dirichlet到本文RWTH构造下的性能下降幅度，
-    凸显本文方法在极限异构下的显著优势。
+    核心逻辑：计算 (Acc_Simple - Acc_RWTH) / Acc_Simple
     """
     methods = ["FedAvg", "FedProx", "Proposed (本文方法)"]
     keys = ["FedAvg", "FedProx", "Proposed"]
@@ -174,50 +190,49 @@ def plot_degradation_and_advantage(data, alpha="0.1"):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # 绘制分组柱状图
-    rects1 = ax.bar(x - width / 2, acc_simple, width, label='单纯 Dirichlet', color='#95a5a6',
+    rects1 = ax.bar(x - width / 2, acc_simple, width, label='单纯 Dirichlet (α=0.5)', color='#95a5a6',
                     edgecolor='black')
-    rects2 = ax.bar(x + width / 2, acc_rwth, width, label='本文 RWTH 划分', color='#e74c3c',
-                    edgecolor='black')
+    rects2 = ax.bar(x + width / 2, acc_rwth, width, label='本文 RWTH 划分 (高异构)', color='#e74c3c', edgecolor='black')
 
-    # 计算并标注性能下降幅度 (Performance Drop)
+    # 计算并标注性能下降幅度
     for i in range(len(methods)):
         drop_val = acc_simple[i] - acc_rwth[i]
-        drop_pct = (drop_val / acc_simple[i]) * 100
+        drop_pct = (drop_val / acc_simple[i]) * 100 if acc_simple[i] > 0 else 0
 
-        # 在高柱子上标单纯值
+        # 在高柱子上标数值
         ax.text(x[i] - width / 2, acc_simple[i] + 0.01, f'{acc_simple[i]:.3f}', ha='center', va='bottom', fontsize=10)
-        # 在矮柱子上标RWTH值
+        # 在矮柱子上标数值
         ax.text(x[i] + width / 2, acc_rwth[i] + 0.01, f'{acc_rwth[i]:.3f}', ha='center', va='bottom', fontsize=10)
 
-        # 标注下降箭头和百分比
+        # 标注下降百分比 (重点突出 Proposed 的下降幅度小)
         font_weight = 'bold' if keys[i] == "Proposed" else 'normal'
-        color = 'darkgreen' if keys[i] == "Proposed" else 'darkred'
-        ax.text(x[i] + width / 2, acc_rwth[i] - 0.08, f'↓ 掉点 {drop_pct:.1f}%', ha='center', va='bottom', color=color,
-                fontweight=font_weight, fontsize=11)
+        color = 'darkgreen' if keys[i] == "Proposed" else 'darkred'  # 本文方法用绿色表示稳健
+
+        # 在柱子中间画下降箭头和文字
+        ax.text(x[i] + width / 2, acc_rwth[i] + 0.05, f'↓{drop_pct:.1f}%',
+                ha='center', va='bottom', color=color, fontweight=font_weight, fontsize=11)
 
     ax.set_ylabel('全局测试集准确率 (Accuracy)', fontsize=12)
-    ax.set_title(
-        f'图5：数据挑战升级对算法性能的冲击对比 (α={alpha})\n(证明在极限恶劣环境下，本文方法性能衰减最小，优势被显著放大)',
-        fontsize=14, fontweight='bold')
+    ax.set_title(f'图5：数据异构升级对算法性能的冲击对比 (α={alpha})\n(本文方法在极端环境下性能衰减最小)', fontsize=14,
+                 fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(methods, fontsize=12)
     ax.legend(loc='upper right', fontsize=11)
-    ax.set_ylim(0, 1.15)  # 留出顶部空间给文本
+    ax.set_ylim(0, 1.2)  # 留出空间给文字
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
     plt.savefig("./results/plot5_degradation.png", dpi=300)
-
 
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     data = load_data()
 
     # 1. 经典性能对比柱状图
-    plot_classic_bar(data, alpha="0.1")
+    plot_classic_bar(data, alpha="0.5")
 
     # 2. 生成四大证明图表（强烈建议用 alpha=0.1 展示，对比最明显）
-    target_alpha = "0.1"
+    target_alpha = "0.5"
     plot_heatmap(target_alpha)
     plot_histogram_and_coverage(target_alpha)
     plot_convergence(data, target_alpha)

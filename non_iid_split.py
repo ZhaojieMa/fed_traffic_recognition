@@ -28,71 +28,65 @@ def simple_dirichlet_split(y, num_clients, alpha=0.5):
     return client_data_idx
 
 
-def realistic_traffic_split(y, num_clients, alpha=0.05, noise_ratio=0.05):
+def realistic_traffic_split(y, num_clients, alpha=0.05, noise_ratio=0.15):
     """
-    【完整修改版】构造极端的 Non-IID 挑战，确保 RWTH 表现远低于 Simple 划分。
-    特征：
-    1. 数量倾斜 (Quantity Skew)：利用 Log-Normal 分布模拟客户端设备活跃度的巨大差异。
-    2. 病理级标签偏策 (Pathological Skew)：每个客户端强制只持有极少数类（主导类），模拟极端专业化的流量。
-    3. 严格去重：通过动态索引池管理，确保样本不重复且被完整利用。
+    【学术级 RWTH 划分】
+    结合真实网络流量特征：客户端拥有少量“主导应用”(占绝大比例 85%)，
+    同时包含“背景流量/噪声”(占 15%，模拟 DNS/NTP/基础 HTTPS 等真实全局交互)。
+    既保持极端的 Non-IID 特性，又避免了 100% 绝对孤岛导致的联邦模型数学崩塌。
     """
     num_samples = len(y)
     num_classes = len(np.unique(y))
 
-    # --- 1. 构造客户端数据量分布 (Quantity Skew) ---
-    # 使用对数正态分布产生样本量差异，sigma 越大，贫富差距越大
-    samples_per_client = np.random.lognormal(mean=4.0, sigma=1.2, size=num_clients)
+    # 1. 数量倾斜 (Lognormal) - 模拟活跃/非活跃用户的流量总数差异
+    samples_per_client = np.random.lognormal(mean=3.0, sigma=1.2, size=num_clients)
     samples_per_client = (samples_per_client / samples_per_client.sum() * num_samples).astype(int)
+    samples_per_client[np.argmax(samples_per_client)] += num_samples - samples_per_client.sum()
 
-    # 修正四舍五入导致的样本总数微小偏差
-    diff = num_samples - samples_per_client.sum()
-    for i in range(abs(diff)):
-        samples_per_client[i % num_clients] += (1 if diff > 0 else -1)
-
-    # --- 2. 准备各类别的索引池 ---
-    # indices_by_class[cls_id] 存储该类所有的样本索引
     indices_by_class = [np.where(y == i)[0].tolist() for i in range(num_classes)]
-    for cls_list in indices_by_class:
-        np.random.shuffle(cls_list)
+    for cls_list in indices_by_class: np.random.shuffle(cls_list)
 
     client_data_idx = [[] for _ in range(num_clients)]
+    background_pool = []
 
-    # --- 3. 第一阶段：分配主导类 (Pathological Assignment) ---
-    # 每个客户端随机分配 2 个“主导类别”，占据其目标样本量的 85%
+    # 2. 提取每个客户端的主导类 (占 1 - noise_ratio)
     for c in range(num_clients):
-        target_size = samples_per_client[c]
-        # 随机选 2 个类作为该客户端的“专业领域”
-        main_classes = np.random.choice(range(num_classes), size=2, replace=False)
+        target_total = samples_per_client[c]
+        target_main = int(target_total * (1.0 - noise_ratio))
 
-        # 每个主导类尝试分配目标量的 42.5%
-        for cls in main_classes:
-            take_num = int(target_size * 0.425)
-            # 确保不超出该类现有的样本数
-            actual_take = min(len(indices_by_class[cls]), take_num)
+        # 每个客户端分配 2 个主导类别
+        main_cls_1 = c % num_classes
+        main_cls_2 = (c + 1) % num_classes
 
-            # 抽取并从原始池中删除，实现去重
-            client_data_idx[c].extend(indices_by_class[cls][:actual_take])
-            indices_by_class[cls] = indices_by_class[cls][actual_take:]
+        take_1 = min(len(indices_by_class[main_cls_1]), int(target_main * 0.6))
+        client_data_idx[c].extend(indices_by_class[main_cls_1][:take_1])
+        indices_by_class[main_cls_1] = indices_by_class[main_cls_1][take_1:]
 
-    # --- 4. 第二阶段：全局碎片填充 (Residual Filling) ---
-    # 将所有类池中剩余的索引汇总，填补客户端剩余的配额
-    # 这部分模拟了真实环境中的背景流量和长尾噪声
-    remaining_pool = []
-    for cls_list in indices_by_class:
-        remaining_pool.extend(cls_list)
-    np.random.shuffle(remaining_pool)
+        take_2 = min(len(indices_by_class[main_cls_2]), target_main - take_1)
+        client_data_idx[c].extend(indices_by_class[main_cls_2][:take_2])
+        indices_by_class[main_cls_2] = indices_by_class[main_cls_2][take_2:]
 
+    # 3. 将所有剩余数据汇入全局背景池 (模拟互联网公共流量)
+    for cls in range(num_classes):
+        background_pool.extend(indices_by_class[cls])
+    np.random.shuffle(background_pool)
+
+    # 4. 用背景池填补客户端的剩余额度 (noise_ratio 部分)
+    current_idx = 0
     for c in range(num_clients):
-        needed = samples_per_client[c] - len(client_data_idx[c])
-        if needed > 0 and len(remaining_pool) > 0:
-            actual_fill = min(len(remaining_pool), needed)
-            client_data_idx[c].extend(remaining_pool[:actual_fill])
-            remaining_pool = remaining_pool[actual_fill:]
+        target_total = samples_per_client[c]
+        current_len = len(client_data_idx[c])
+        need = target_total - current_len
 
-    # --- 5. 兜底处理 (Final Cleanup) ---
-    # 如果 pool 还有极少量剩余（由于计算精度），随机塞给数据量最小的客户端
-    if len(remaining_pool) > 0:
-        client_data_idx[np.argmin(samples_per_client)].extend(remaining_pool)
+        if need > 0 and current_idx < len(background_pool):
+            take_bg = min(need, len(background_pool) - current_idx)
+            client_data_idx[c].extend(background_pool[current_idx : current_idx + take_bg])
+            current_idx += take_bg
+
+    # 兜底：如果背景池还有剩余，随机散布给各客户端
+    while current_idx < len(background_pool):
+        client_data_idx[np.random.randint(num_clients)].append(background_pool[current_idx])
+        current_idx += 1
 
     return client_data_idx
 
@@ -153,7 +147,7 @@ if __name__ == "__main__":
     ZIPF_ALPHA = 1.5
 
     num_clients = 10
-    alphas = [0.1]
+    alphas = [0.5]
     num_classes = len(le.classes_)
 
     train_df_rwth = make_global_long_tail(train_df, total_samples=TOTAL_SAMPLES_TO_USE, zipf_alpha=ZIPF_ALPHA)
