@@ -157,7 +157,7 @@ if __name__ == "__main__":
         splits = {
             "simple": (train_df_simple, simple_dirichlet_split(train_df_simple['label'].values, num_clients, alpha)),
             # 实验组：应用本文设计的真实流量混合划分！
-            "rwth": (train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.03))
+            "rwth": (train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.01))
         }
 
         for split_type, (base_df, client_indices) in splits.items():

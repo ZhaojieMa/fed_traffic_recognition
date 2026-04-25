@@ -281,73 +281,143 @@
 #
 #     print("\n[完成] 所有对比实验数据（含本地训练）已存至 ./results/metrics.json，请运行 analysis.py 绘图。")
 
-# import pandas as pd
-# import json
-# import os
-# import warnings
+import pandas as pd
+import numpy as np
+import os
+import json
+import warnings
+from sklearn.preprocessing import StandardScaler
+
+warnings.filterwarnings('ignore')
+
+# 精确对齐 Darknet.CSV 的特征
+TARGET_FEATURES = [
+    'Flow Duration', 'Total Fwd Packet', 'Total Bwd packets',
+    'Total Length of Fwd Packet', 'Total Length of Bwd Packet',
+    'Fwd Packet Length Max', 'Fwd Packet Length Min', 'Fwd Packet Length Mean', 'Fwd Packet Length Std',
+    'Bwd Packet Length Max', 'Bwd Packet Length Min', 'Bwd Packet Length Mean', 'Bwd Packet Length Std',
+    'Flow Bytes/s', 'Flow Packets/s', 'Flow IAT Mean', 'Flow IAT Std', 'Flow IAT Max', 'Flow IAT Min',
+    'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std', 'Fwd IAT Max', 'Fwd IAT Min',
+    'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std', 'Bwd IAT Max', 'Bwd IAT Min',
+    'Fwd PSH Flags', 'Fwd Header Length', 'Bwd Header Length',
+    'Fwd Packets/s', 'Bwd Packets/s', 'Min Packet Length', 'Max Packet Length',
+    'Packet Length Mean', 'Packet Length Std', 'Packet Length Variance',
+    'FIN Flag Count', 'SYN Flag Count', 'RST Flag Count', 'PSH Flag Count', 'ACK Flag Count',
+    'Down/Up Ratio', 'Average Packet Size', 'Avg Fwd Segment Size', 'Avg Bwd Segment Size'
+]
+
+
+def preprocess_darknet_csv(file_path):
+    print(f"正在深度预处理文件: {file_path} ...")
+    df = pd.read_csv(file_path, low_memory=False)
+
+    # 1. 动态检测标签列
+    label_col = 'Label.1' if 'Label.1' in df.columns else df.columns[-1]
+    df[label_col] = df[label_col].astype(str).str.strip().str.lower()
+
+    # 2. 特征筛选
+    available_features = [c for c in TARGET_FEATURES if c in df.columns]
+    features = df[available_features].copy()
+    labels = df[label_col].copy()
+
+    # 3. 数据清洗：强制数值化并处理 Inf/NaN
+    for col in features.columns:
+        features[col] = pd.to_numeric(features[col], errors='coerce')
+    features = features.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    # 4. 【核心优化】构造比例特征 (增加区分度)
+    features['fwd_bwd_ratio'] = features['Total Fwd Packet'] / (features['Total Bwd packets'] + 1)
+    features['avg_byte_per_pkt'] = (features['Total Length of Fwd Packet'] + features['Total Length of Bwd Packet']) / \
+                                   (features['Total Fwd Packet'] + features['Total Bwd packets'] + 1)
+
+    # 5. 【核心优化】Log1p + StandardScaler 组合拳
+    # 先做 Log 变换平滑长尾分布
+    features = np.log1p(features.clip(lower=0))
+    # 再做标准化，让数据符合神经网络的偏好
+    scaler = StandardScaler()
+    scaled_values = scaler.fit_transform(features)
+    features_df = pd.DataFrame(scaled_values, columns=features.columns)
+
+    print(f"预处理完成。最终特征数: {features_df.shape[1]}")
+    return features_df, labels, list(features_df.columns)
+
+
+if __name__ == "__main__":
+    csv_path = "D:/Darknet.CSV"  # 请根据实际路径修改
+
+    if os.path.exists(csv_path):
+        features_df, raw_labels, final_feature_list = preprocess_darknet_csv(csv_path)
+
+        # 标签转 ID
+        unique_labels = sorted(raw_labels.unique())
+        label_to_id = {label: i for i, label in enumerate(unique_labels)}
+        features_df['label'] = raw_labels.map(label_to_id).values
+
+        # 保存
+        os.makedirs("./dataset", exist_ok=True)
+        features_df.to_csv("./dataset/traffic_features.csv", index=False)
+        with open("./dataset/meta.json", "w") as f:
+            json.dump({"input_dim": len(final_feature_list), "num_classes": len(label_to_id)}, f)
+        print(f"数据集已保存，维度: {len(final_feature_list)}, 类别数: {len(label_to_id)}")
+    else:
+        print(f"错误: 找不到 {csv_path}")
+
+
+# class SEBlock(nn.Module):
+#     def __init__(self, channels, reduction=16):
+#         super().__init__()
+#         self.fc = nn.Sequential(
+#             nn.Linear(channels, max(1, channels // reduction), bias=False),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(max(1, channels // reduction), channels, bias=False),
+#             nn.Sigmoid()
+#         )
 #
-# warnings.filterwarnings('ignore')
+#     def forward(self, x):
+#         w = self.fc(x)
+#         return x * w
 #
 #
-# def extract_flow_features_from_json(json_path, label):
-#     try:
-#         with open(json_path, 'r', encoding='utf-8') as f:
-#             data = json.load(f)
+# class TrafficResNet(nn.Module):
+#     def __init__(self, input_dim, num_classes):
+#         super(TrafficResNet, self).__init__()
 #
-#         all_flows = []
-#         for flow_id, flow_content in data.items():
-#             flow_feats = flow_content.get('flow_features', {})
-#             row = {}
+#         # 增加宽度到 512 解决瓶颈
+#         self.hidden_dim = 512
 #
-#             for feat_name, directions in flow_feats.items():
-#                 if 'biflow' in directions:
-#                     for stat_name, value in directions['biflow'].items():
-#                         if isinstance(value, (int, float)):
-#                             row[f"{feat_name}_{stat_name}"] = value
+#         self.input_layer = nn.Sequential(
+#             nn.Linear(input_dim, self.hidden_dim),
+#             nn.LayerNorm(self.hidden_dim),
+#             nn.ReLU()
+#         )
 #
-#             if row:
-#                 row['label'] = label
-#                 all_flows.append(row)
+#         # 残差块 1 (512 -> 512)
+#         self.res1 = nn.Linear(self.hidden_dim, self.hidden_dim)
+#         self.se1 = SEBlock(self.hidden_dim)
 #
-#         df = pd.DataFrame(all_flows)
-#         return df
-#     except Exception as e:
-#         print(f"处理 JSON 文件出错 {json_path}：{str(e)}")
-#         return pd.DataFrame()
+#         # 残差块 2 (512 -> 512)
+#         # 注意：这里必须也是 512，否则会发生你遇到的 mat1/mat2 报错
+#         self.res2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+#         self.se2 = SEBlock(self.hidden_dim)
 #
+#         # 如果 res2 的输出维度和输入维度一致，就不需要 proj2
+#         # 但为了代码健壮性，我们可以保留一个恒等映射或线性层
+#         self.proj2 = nn.Identity()
 #
-# if __name__ == "__main__":
-#     # ====================== 只需改这里 ======================
-#     folder_path = r"D:\MIRAGE-2019_traffic_dataset\Mi5_38_a4_ed_18_cc_bf"
-#     # ========================================================
+#         self.dropout = nn.Dropout(0.3)
+#         self.classifier = nn.Linear(self.hidden_dim, num_classes)
 #
-#     all_features = []
-#     count = 0
-#     # 自动遍历文件夹中所有 .json 文件
-#     for filename in os.listdir(folder_path):
-#         if filename.endswith(".json"):
-#             if count == 100:
-#                 break
-#             count += 1
-#             json_path = os.path.join(folder_path, filename)
+#     def forward(self, x):
+#         x = self.input_layer(x)
 #
-#             # 自动用文件名作为标签（也可以自己映射）
-#             label = filename  # 你也可以改成固定标签，如 "VPN"
-#             print(f"正在处理：{filename}")
+#         # Residual 1
+#         identity = x
+#         x = F.relu(self.res1(x))
+#         x = self.se1(x) + identity
 #
-#             df = extract_flow_features_from_json(json_path, label)
-#             if not df.empty:
-#                 all_features.append(df)
+#         # Residual 2
+#         identity = self.proj2(x)
+#         x = F.relu(self.res2(x))
+#         x = self.se2(x) + identity
 #
-#     if all_features:
-#         final_df = pd.concat(all_features, ignore_index=True)
-#         final_df = final_df.replace([float('inf'), float('-inf')], float('nan'))
-#         final_df = final_df.fillna(0.0)
-#
-#         os.makedirs("./dataset", exist_ok=True)
-#         final_df.to_csv("./dataset/traffic_features.csv", index=False, encoding='utf-8')
-#         print(f"\n特征提取完成！")
-#         print(f"总样本数：{len(final_df)}")
-#         print(f"特征维度：{final_df.shape[1] - 1}")
-#     else:
-#         print("未提取到任何特征，请检查文件夹路径。")
+#         return self.classifier(self.dropout(x))

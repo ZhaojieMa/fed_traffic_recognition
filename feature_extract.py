@@ -39,18 +39,29 @@ def get_clean_label(filename):
     针对 Non-VPN 数据集的标签清洗逻辑优化
     Non-VPN 数据集通常包含: Chat, Email, FTP, P2P, Streaming, VoIP, VPN_Chat...
     """
-    label = os.path.splitext(filename)[0].lower()
+    name = file_name.lower()
 
-    # 1. 去除末尾的版本号/序列号 (如 _3a, 1, -2b)
-    label = re.sub(r'[_-]?\d+[a-z]*$', '', label)
+    # 1. 去除 VPN 前缀
+    if name.startswith("vpn_"):
+        name = name.replace("vpn_", "", 1)
 
-    # 2. 处理 Non-VPN 特有的前缀或格式
-    # 如果是 "non-vpn_chat" 或 "vpn_chat"，我们都只关心 "chat"
-    # 但为了实验严谨性，如果文件名本身就是类别名，则保留
-    # 这里做一个通用的清洗：只保留字母，去除数字和特殊符号
-    # 注意：这取决于你的文件夹命名规范。
-    # 假设文件夹名为 "Chat", "Email" 等
-    return label.replace('_', '').replace('-', '')
+    # 2. 特殊处理：有些文件名没有下划线分隔，如 facebookchat1
+    # 我们先把已知的关键词标准化
+    keywords = ["aim_chat", "aimchat", "email", "facebook_chat", "facebookchat",
+                "facebook_audio", "facebook_video", "bittorrent", "ftps",
+                "hangouts_audio", "hangouts_chat"]
+
+    # 统一转换常见的连写
+    name = name.replace("aimchat", "aim_chat")
+    name = name.replace("facebookchat", "facebook_chat")
+
+    # 3. 提取核心关键词 (匹配到即停止)
+    for kw in ["aim_chat", "email", "facebook_chat", "facebook_audio",
+               "facebook_video", "bittorrent", "ftps", "hangouts_audio", "hangouts_chat"]:
+        if kw in name:
+            return kw
+
+    return "others"
 
 
 def extract_flow_features(pcap_path, label_id):
@@ -110,9 +121,7 @@ def extract_flow_features(pcap_path, label_id):
 
 if __name__ == "__main__":
     # 请根据实际路径切换
-    # vpn_dir = "D:/VPN-PCAPs-01"
-    temp_dir = "D:/VPN-PCAPs-01"
-    target_dir = temp_dir  # 切换这里
+    target_dir = "D:/VPN-NonVPN-PCAPs-01"
 
     all_features = []
     label_to_id = {}
