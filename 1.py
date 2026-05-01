@@ -281,86 +281,131 @@
 #
 #     print("\n[完成] 所有对比实验数据（含本地训练）已存至 ./results/metrics.json，请运行 analysis.py 绘图。")
 
-import pandas as pd
-import numpy as np
-import os
-import json
-import warnings
-from sklearn.preprocessing import StandardScaler
-
-warnings.filterwarnings('ignore')
-
-# 精确对齐 Darknet.CSV 的特征
-TARGET_FEATURES = [
-    'Flow Duration', 'Total Fwd Packet', 'Total Bwd packets',
-    'Total Length of Fwd Packet', 'Total Length of Bwd Packet',
-    'Fwd Packet Length Max', 'Fwd Packet Length Min', 'Fwd Packet Length Mean', 'Fwd Packet Length Std',
-    'Bwd Packet Length Max', 'Bwd Packet Length Min', 'Bwd Packet Length Mean', 'Bwd Packet Length Std',
-    'Flow Bytes/s', 'Flow Packets/s', 'Flow IAT Mean', 'Flow IAT Std', 'Flow IAT Max', 'Flow IAT Min',
-    'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std', 'Fwd IAT Max', 'Fwd IAT Min',
-    'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std', 'Bwd IAT Max', 'Bwd IAT Min',
-    'Fwd PSH Flags', 'Fwd Header Length', 'Bwd Header Length',
-    'Fwd Packets/s', 'Bwd Packets/s', 'Min Packet Length', 'Max Packet Length',
-    'Packet Length Mean', 'Packet Length Std', 'Packet Length Variance',
-    'FIN Flag Count', 'SYN Flag Count', 'RST Flag Count', 'PSH Flag Count', 'ACK Flag Count',
-    'Down/Up Ratio', 'Average Packet Size', 'Avg Fwd Segment Size', 'Avg Bwd Segment Size'
-]
-
-
-def preprocess_darknet_csv(file_path):
-    print(f"正在深度预处理文件: {file_path} ...")
-    df = pd.read_csv(file_path, low_memory=False)
-
-    # 1. 动态检测标签列
-    label_col = 'Label.1' if 'Label.1' in df.columns else df.columns[-1]
-    df[label_col] = df[label_col].astype(str).str.strip().str.lower()
-
-    # 2. 特征筛选
-    available_features = [c for c in TARGET_FEATURES if c in df.columns]
-    features = df[available_features].copy()
-    labels = df[label_col].copy()
-
-    # 3. 数据清洗：强制数值化并处理 Inf/NaN
-    for col in features.columns:
-        features[col] = pd.to_numeric(features[col], errors='coerce')
-    features = features.replace([np.inf, -np.inf], np.nan).fillna(0)
-
-    # 4. 【核心优化】构造比例特征 (增加区分度)
-    features['fwd_bwd_ratio'] = features['Total Fwd Packet'] / (features['Total Bwd packets'] + 1)
-    features['avg_byte_per_pkt'] = (features['Total Length of Fwd Packet'] + features['Total Length of Bwd Packet']) / \
-                                   (features['Total Fwd Packet'] + features['Total Bwd packets'] + 1)
-
-    # 5. 【核心优化】Log1p + StandardScaler 组合拳
-    # 先做 Log 变换平滑长尾分布
-    features = np.log1p(features.clip(lower=0))
-    # 再做标准化，让数据符合神经网络的偏好
-    scaler = StandardScaler()
-    scaled_values = scaler.fit_transform(features)
-    features_df = pd.DataFrame(scaled_values, columns=features.columns)
-
-    print(f"预处理完成。最终特征数: {features_df.shape[1]}")
-    return features_df, labels, list(features_df.columns)
-
-
-if __name__ == "__main__":
-    csv_path = "D:/Darknet.CSV"  # 请根据实际路径修改
-
-    if os.path.exists(csv_path):
-        features_df, raw_labels, final_feature_list = preprocess_darknet_csv(csv_path)
-
-        # 标签转 ID
-        unique_labels = sorted(raw_labels.unique())
-        label_to_id = {label: i for i, label in enumerate(unique_labels)}
-        features_df['label'] = raw_labels.map(label_to_id).values
-
-        # 保存
-        os.makedirs("./dataset", exist_ok=True)
-        features_df.to_csv("./dataset/traffic_features.csv", index=False)
-        with open("./dataset/meta.json", "w") as f:
-            json.dump({"input_dim": len(final_feature_list), "num_classes": len(label_to_id)}, f)
-        print(f"数据集已保存，维度: {len(final_feature_list)}, 类别数: {len(label_to_id)}")
-    else:
-        print(f"错误: 找不到 {csv_path}")
+# import pandas as pd
+# import numpy as np
+# import os
+# import json
+# import warnings
+# from sklearn.preprocessing import StandardScaler
+#
+# warnings.filterwarnings('ignore')
+#
+# # 精确对齐 Darknet.CSV 的特征
+# TARGET_FEATURES = [
+#     'Flow Duration', 'Total Fwd Packet', 'Total Bwd packets',
+#     'Total Length of Fwd Packet', 'Total Length of Bwd Packet',
+#     'Fwd Packet Length Max', 'Fwd Packet Length Min', 'Fwd Packet Length Mean', 'Fwd Packet Length Std',
+#     'Bwd Packet Length Max', 'Bwd Packet Length Min', 'Bwd Packet Length Mean', 'Bwd Packet Length Std',
+#     'Flow Bytes/s', 'Flow Packets/s', 'Flow IAT Mean', 'Flow IAT Std', 'Flow IAT Max', 'Flow IAT Min',
+#     'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std', 'Fwd IAT Max', 'Fwd IAT Min',
+#     'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std', 'Bwd IAT Max', 'Bwd IAT Min',
+#     'Fwd PSH Flags', 'Fwd Header Length', 'Bwd Header Length',
+#     'Fwd Packets/s', 'Bwd Packets/s', 'Min Packet Length', 'Max Packet Length',
+#     'Packet Length Mean', 'Packet Length Std', 'Packet Length Variance',
+#     'FIN Flag Count', 'SYN Flag Count', 'RST Flag Count', 'PSH Flag Count', 'ACK Flag Count',
+#     'Down/Up Ratio', 'Average Packet Size', 'Avg Fwd Segment Size', 'Avg Bwd Segment Size'
+# ]
+#
+# import pandas as pd
+# import numpy as np
+# import os
+# import json
+# from sklearn.preprocessing import StandardScaler
+#
+# # 根据 CIC-Darknet2020 论文标准，需要剔除的非特征列（防止过拟合/特征泄露）
+# DROP_COLUMNS = [
+#     'Flow ID', 'Source IP', 'Source Port', 'Destination IP',
+#     'Destination Port', 'Timestamp', 'Label'  # 这里的 Label 是大类，我们通常预测 Label.1
+# ]
+#
+#
+# def preprocess_darknet_csv(file_path):
+#     print(f"正在深度预处理文件: {file_path} ...")
+#     df = pd.read_csv(file_path, low_memory=False)
+#
+#     # 1. 动态检测标签列并清洗
+#     # CIC-Darknet2020 的 Label.1 对应具体的流量类型 (P2P, Audio-Streaming, etc.)
+#     label_col = 'Label.1' if 'Label.1' in df.columns else df.columns[-1]
+#     df[label_col] = df[label_col].astype(str).str.strip().str.lower()
+#
+#     # 【新增】剔除无意义或导致泄露的列
+#     cols_to_drop = [c for c in DROP_COLUMNS if c in df.columns and c != label_col]
+#     df = df.drop(columns=cols_to_drop)
+#
+#     # 2. 自动特征筛选（剔除非数值列和标签列）
+#     # 相比硬编码 TARGET_FEATURES，这样更具鲁棒性
+#     features = df.drop(columns=[label_col]).copy()
+#     labels = df[label_col].copy()
+#
+#     # 3. 数据清洗：强制数值化并处理 Inf/NaN
+#     for col in features.columns:
+#         if features[col].dtype == 'object':
+#             features[col] = pd.to_numeric(features[col], errors='coerce')
+#
+#     # 替换 Inf 为 NaN 并用 0 填充
+#     features = features.replace([np.inf, -np.inf], np.nan).fillna(0)
+#
+#     # 【新增】剔除全 0 或常数列（无区分度特征）
+#     features = features.loc[:, (features != features.iloc[0]).any()]
+#
+#     # 4. 【核心优化】构造比例特征 (增加区分度)
+#     # 注意：确保这些基础列在清洗后依然存在
+#     fwd_pkt_col = 'Total Fwd Packets' if 'Total Fwd Packets' in features.columns else 'Total Fwd Packet'
+#     bwd_pkt_col = 'Total Bwd packets'
+#     fwd_len_col = 'Total Length of Fwd Packets' if 'Total Length of Fwd Packets' in features.columns else 'Total Length of Fwd Packet'
+#     bwd_len_col = 'Total Length of Bwd Packets' if 'Total Length of Bwd Packets' in features.columns else 'Total Length of Bwd Packet'
+#
+#     if fwd_pkt_col in features.columns and bwd_pkt_col in features.columns:
+#         features['fwd_bwd_ratio'] = features[fwd_pkt_col] / (features[bwd_pkt_col] + 1)
+#         features['avg_byte_per_pkt'] = (features[fwd_len_col] + features[bwd_len_col]) / \
+#                                        (features[fwd_pkt_col] + features[bwd_pkt_col] + 1)
+#
+#     # 5. 【核心优化】Log1p + StandardScaler 组合拳
+#     # 先做 Log 变换平滑流量数据的长尾分布（流量数据通常服从幂律分布）
+#     features = np.log1p(features.clip(lower=0))
+#
+#     # 再做标准化
+#     scaler = StandardScaler()
+#     scaled_values = scaler.fit_transform(features)
+#     features_df = pd.DataFrame(scaled_values, columns=features.columns)
+#
+#     print(f"预处理完成。原始特征数: {df.shape[1]}, 最终保留特征数: {features_df.shape[1]}")
+#     return features_df, labels, list(features_df.columns)
+#
+#
+# if __name__ == "__main__":
+#     # 建议使用绝对路径或确保文件存在
+#     csv_path = "D:/Darknet.CSV"
+#
+#     if os.path.exists(csv_path):
+#         features_df, raw_labels, final_feature_list = preprocess_darknet_csv(csv_path)
+#
+#         # 标签转 ID（确保类别一致性）
+#         unique_labels = sorted(raw_labels.unique())
+#         label_to_id = {label: i for i, label in enumerate(unique_labels)}
+#
+#         # 使用 loc 确保索引对齐
+#         features_df['label'] = raw_labels.map(label_to_id).reset_index(drop=True)
+#
+#         # 【新增】处理重复行（防止数据泄露）
+#         initial_count = len(features_df)
+#         features_df = features_df.drop_duplicates().reset_index(drop=True)
+#         print(f"剔除重复流: {initial_count} -> {len(features_df)}")
+#
+#         # 保存
+#         os.makedirs("./dataset", exist_ok=True)
+#         features_df.to_csv("./dataset/traffic_features.csv", index=False)
+#
+#         with open("./dataset/meta.json", "w") as f:
+#             json.dump({
+#                 "input_dim": len(final_feature_list),
+#                 "num_classes": len(label_to_id),
+#                 "class_map": label_to_id
+#             }, f, indent=4)
+#
+#         print(f"数据集已保存，维度: {len(final_feature_list)}, 类别数: {len(label_to_id)}")
+#     else:
+#         print(f"错误: 找不到 {csv_path}")
 
 
 # class SEBlock(nn.Module):
@@ -421,3 +466,218 @@ if __name__ == "__main__":
 #         x = self.se2(x) + identity
 #
 #         return self.classifier(self.dropout(x))
+# def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.01):
+#     device = outputs.device
+#
+#     # 1. 原有的 Logit Adjustment (保持不变)
+#     tau = current_round / total_rounds
+#     pi_y = torch.clamp(label_dist.to(device), min=1e-6)
+#     margin = tau * torch.log(pi_y)
+#     adjusted_outputs = outputs + margin
+#     ce_loss = F.cross_entropy(adjusted_outputs, labels)
+#
+#     # --- 创新点：动态梯度重加权 (DGR) ---
+#     # 计算当前 Batch 的“稀缺性因子” (Scarcity Factor)
+#     # 统计当前 Batch 中每个类别的出现频率
+#     batch_size = labels.size(0)
+#     unique_labels, counts = labels.unique(return_counts=True)
+#     batch_dist = torch.zeros_like(pi_y)
+#     batch_dist[unique_labels] = counts.float() / batch_size
+#
+#     # 稀缺性因子 S：本地 Batch 中“长尾类别”的占比
+#     # 这里我们假设频率低于平均值的类别是长尾类别
+#     avg_freq = pi_y.mean()
+#     # S 越大，说明当前 Batch 包含越多全局稀缺的长尾样本
+#     S = (batch_dist * (pi_y < avg_freq).float()).sum().item()
+#
+#     # --- 动态调整 Proximal 的权重 ---
+#     # 基础 Proximal Loss
+#     prox_loss = 0
+#     if global_model is not None:
+#         for p, g_p in zip(model.parameters(), global_model.parameters()):
+#             prox_loss += (p - g_p).norm(2) ** 2
+#
+#     # 动态系数 Lambda: 当 S (稀缺样本占比) 高时，降低 Proximal 的影响
+#     # 这样模型在遇到难得一见的长尾样本时，可以更自由地更新参数，而不被全局模型锁死
+#     # alpha_dgr 是一个超参数，控制动态范围
+#     alpha_dgr = 0.5
+#     lambda_prox = 1.0 - alpha_dgr * S  # S 越大，lambda 越小
+#
+#     # --- 最终 Loss 组合 ---
+#     # 注意：这里不再是简单的加法，而是受 S 调制的加法
+#     total_loss = ce_loss + (mu / 2) * lambda_prox * prox_loss
+#
+#     return total_loss
+
+
+# def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds,
+#                    mu=0.01, gamma=2.0, use_la=True, use_focal=True, use_decoupled_prox=True):
+#     device = outputs.device
+#
+#     # ---------------------------------------------------------
+#     # 1. Logit Adjustment (LA)
+#     # ---------------------------------------------------------
+#     if use_la:
+#         # 优化：引入退火系数，随轮数增加逐渐增强调整强度
+#         tau = (current_round / total_rounds) ** 2
+#         pi_y = torch.clamp(label_dist.to(device), min=1e-4)
+#         margin = tau * torch.log(pi_y)
+#         adjusted_outputs = outputs + margin
+#     else:
+#         adjusted_outputs = outputs
+#
+#     # ---------------------------------------------------------
+#     # 2. Focal Loss
+#     # ---------------------------------------------------------
+#     if use_focal:
+#         probs = F.softmax(adjusted_outputs, dim=1)
+#         target_probs = probs[range(labels.size(0)), labels]
+#         focal_weight = (1 - target_probs) ** gamma
+#         ce_loss = F.cross_entropy(adjusted_outputs, labels, reduction='none')
+#         task_loss = (focal_weight * ce_loss).mean()
+#     else:
+#         task_loss = F.cross_entropy(adjusted_outputs, labels)
+#
+#     # ---------------------------------------------------------
+#     # 3. 改进的 Proximal Term (核心改进点)
+#     # ---------------------------------------------------------
+#     prox_loss = 0.0
+#     if global_model is not None and mu > 0:
+#         # 计算本地类别的相对频率分布，归一化到 [0, 1]
+#         # 加 1e-8 防止除以 0
+#         local_freq = label_dist.to(device)
+#         norm_freq = local_freq / (local_freq.max() + 1e-8)
+#
+#         for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
+#             if use_decoupled_prox:
+#                 # ==========================================
+#                 # 分类头：进行【类别维度】的细粒度解耦
+#                 # ==========================================
+#                 if 'classifier.weight' in name and p.shape[0] == len(label_dist):
+#                     # p 的形状为 [num_classes, in_features]
+#                     # 权重惩罚系数：频率越高，约束越小；频率越低（甚至为0），约束越大(接近 mu * 2.0)
+#                     # 形状调整为 [num_classes, 1] 以便利用广播机制
+#                     class_penalty = mu * (1.0 + (1.0 - norm_freq)).view(-1, 1)
+#
+#                     # 逐元素计算 L2 并应用类别感知的 penalty
+#                     layer_loss = (class_penalty * (p - g_p) ** 2).sum()
+#                     prox_loss += layer_loss
+#
+#                 elif 'classifier.bias' in name and p.shape[0] == len(label_dist):
+#                     class_penalty = mu * (1.0 + (1.0 - norm_freq))
+#                     layer_loss = (class_penalty * (p - g_p) ** 2).sum()
+#                     prox_loss += layer_loss
+#
+#                 # ==========================================
+#                 # 特征提取层：保持统一的较强约束，维持全局特征对齐
+#                 # ==========================================
+#                 else:
+#                     prox_loss += (mu * 1.0) * (p - g_p).norm(2) ** 2
+#             else:
+#                 # 标准 FedProx: 无差别全量约束
+#                 prox_loss += mu * (p - g_p).norm(2) ** 2
+#
+#     return task_loss + 0.5 * prox_loss
+#
+#     def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.01,
+#                        gamma=2.0,
+#                        prox_mode='decoupled'):
+#         """
+#         带消融实验开关的 FedLC-Ada 损失函数
+#         prox_mode 可选: 'none', 'standard', 'decoupled'
+#         """
+#         device = outputs.device
+#         tau = (current_round / total_rounds) ** 2
+#         pi_y = torch.clamp(label_dist.to(device), min=1e-4)
+#
+#         margin = tau * torch.log(pi_y)
+#         adjusted_outputs = outputs + margin
+#
+#         probs = F.softmax(adjusted_outputs, dim=1)
+#         target_probs = probs[range(labels.size(0)), labels]
+#         focal_weight = (1 - target_probs) ** gamma
+#         ce_loss = F.cross_entropy(adjusted_outputs, labels, reduction='none')
+#         task_loss = (focal_weight * ce_loss).mean()
+#
+#         # 近端项消融逻辑
+#         prox_loss = 0.0
+#         if global_model is not None and prox_mode != 'none':
+#             for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
+#                 if prox_mode == 'decoupled':
+#                     # 本文提出的解耦模式：释放分类头
+#                     layer_mu = mu * 0.1 if 'classifier' in name else mu
+#                 else:
+#                     # 标准 FedProx 模式：全局死板约束
+#                     layer_mu = mu
+#
+#                 prox_loss += layer_mu * (p - g_p).norm(2) ** 2
+#
+#         return task_loss + 0.5 * prox_loss
+def fedlc_ada_loss(outputs, labels, model, global_model, label_dist,
+                   current_round, total_rounds,
+                   mu=0.001, gamma=2.0,
+                   use_la=True, use_focal=True, use_decoupled_prox=True):
+
+    device = outputs.device
+    tau = current_round / total_rounds
+
+    # =========================
+    # ✅ 1. 正确的 LA（用 batch 分布，不是 client 分布）
+    # =========================
+    if use_la:
+        num_classes = outputs.shape[1]
+
+        # 计算 batch 内真实分布（关键修复）
+        batch_hist = torch.bincount(labels, minlength=num_classes).float().to(device)
+        batch_dist = batch_hist / (batch_hist.sum() + 1e-8)
+
+        margin = tau * torch.log(batch_dist + 1e-5)
+        adjusted_outputs = outputs + margin
+    else:
+        adjusted_outputs = outputs
+
+    # =========================
+    # ✅ 2. Focal Loss（延迟启动，避免前期冻结）
+    # =========================
+    if use_focal:
+        if current_round < total_rounds * 0.3:
+            # 前30%轮：完全关闭 focal
+            task_loss = F.cross_entropy(adjusted_outputs, labels)
+        else:
+            with torch.no_grad():
+                probs = F.softmax(outputs, dim=1)
+                pt = probs[range(labels.size(0)), labels]
+
+            dynamic_gamma = gamma * (tau - 0.3) / 0.7  # 从0慢慢升到gamma
+            focal_weight = (1.0 - pt) ** dynamic_gamma
+
+            ce = F.cross_entropy(adjusted_outputs, labels, reduction='none')
+            task_loss = (focal_weight * ce).mean()
+    else:
+        task_loss = F.cross_entropy(adjusted_outputs, labels)
+
+    # =========================
+    # ✅ 3. Decoupled Prox（强度大幅降低 + 延迟）
+    # =========================
+    prox_loss = 0.0
+
+    if global_model is not None and mu > 0:
+
+        # 🔥 关键：前40轮不加prox（否则直接压死）
+        if current_round < total_rounds * 0.4:
+            return task_loss
+
+        for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
+
+            if use_decoupled_prox and 'classifier' in name:
+
+                # 🔥 关键：弱化类别惩罚（否则直接崩）
+                if 'weight' in name:
+                    prox_loss += (p - g_p).pow(2).sum() * mu * 0.5
+                else:
+                    prox_loss += (p - g_p).pow(2).sum() * mu * 0.5
+
+            else:
+                prox_loss += mu * (p - g_p).pow(2).sum()
+
+    return task_loss + 0.5 * prox_loss

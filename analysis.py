@@ -149,8 +149,8 @@ def plot_convergence(data, alpha="0.5"):
 
 def plot_classic_bar(data, alpha="0.5"):
     """原版柱状图修复"""
-    methods = ["本地独立", "FedAvg", "FedProx", "本文方法(FedLC-Ada)", "集中式(上限)"]
-    keys = ["Local", "FedAvg", "FedProx", "Proposed", "Centralized"]
+    methods = [ "FedAvg", "FedProx", "本文方法(FedLC-Ada)"]
+    keys = ["FedAvg", "FedProx", "Proposed"]
 
     accs = [data[alpha]["rwth"][k]["acc"] for k in keys]
     f1s = [data[alpha]["rwth"][k]["f1"] for k in keys]
@@ -224,6 +224,57 @@ def plot_degradation_and_advantage(data, alpha="0.5"):
     plt.tight_layout()
     plt.savefig("./results/plot5_degradation.png", dpi=300)
 
+
+def plot_ablation_study(data, alpha="0.5"):
+    """
+    针对五组消融实验的收敛曲线对比
+    证明顺序：Proposed > DecoupledProx > LA > FedProx > FedAvg
+    """
+    # 提取数据 (对应 fed_train.py 中的命名)
+    rwth_data = data[alpha]["simple"]
+
+    plt.figure(figsize=(12, 7))
+
+    # 定义各组的颜色和线型，突出 Proposed
+    configs = {
+        "FedAvg": {"color": "#7f8c8d", "ls": "--", "lw": 2, "label": "1. FedAvg (基线)"},
+        "FedProx": {"color": "#3498db", "ls": "-.", "lw": 2, "label": "2. FedProx (常规近端约束)"},
+        "LA": {"color": "#f39c12", "ls": "-", "lw": 2.5, "label": "3. Focal-LA (长尾调整)"},
+        "DecoupledProx": {"color": "#8e44ad", "ls": "-", "lw": 2.5, "label": "4. DecoupledProx (分层解耦约束)"},
+        "Proposed": {"color": "#c0392b", "ls": "-", "lw": 4, "label": "5. 本文方法 (Proposed: 全套方案)"}
+    }
+
+    rounds = None
+    for method, conf in configs.items():
+        if method in rwth_data:
+            hist = rwth_data[method]["hist"]
+            if rounds is None:
+                rounds = range(1, len(hist) + 1)
+            plt.plot(rounds, hist, label=conf["label"], color=conf["color"],
+                     linestyle=conf["ls"], linewidth=conf["lw"])
+
+    plt.title(f"图6：消融实验收敛曲线 (α={alpha})\n验证 Focal-LA 与 分层解耦约束 对异构性能的提升",
+              fontsize=15, fontweight='bold')
+    plt.xlabel("通信轮数 (Rounds)", fontsize=12)
+    plt.ylabel("全局测试集准确率 (Accuracy)", fontsize=12)
+
+    # 重点：标注最终增益
+    final_acc_prop = rwth_data["Proposed"]["acc"]
+    final_acc_avg = rwth_data["FedAvg"]["acc"]
+    total_gain = (final_acc_prop - final_acc_avg) * 100
+
+    plt.annotate(f'总性能增益: +{total_gain:.1f}%',
+                 xy=(len(rounds), final_acc_prop),
+                 xytext=(len(rounds) - 40, final_acc_prop - 0.15),
+                 arrowprops=dict(facecolor='black', shrink=0.05, width=1),
+                 fontsize=12, color='darkred', fontweight='bold',
+                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8))
+
+    plt.legend(loc='lower right', frameon=True, shadow=True, fontsize=11)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("./results/plot6_ablation_final.png", dpi=300)
+
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     data = load_data()
@@ -237,5 +288,6 @@ if __name__ == "__main__":
     plot_histogram_and_coverage(target_alpha)
     plot_convergence(data, target_alpha)
     plot_degradation_and_advantage(data, target_alpha)
+    plot_ablation_study(data,target_alpha)
 
     print("\n所有图表生成完毕，请检查 ./results 文件夹！")

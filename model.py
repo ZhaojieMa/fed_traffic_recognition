@@ -59,32 +59,59 @@ class TrafficResNet(nn.Module):
         return self.classifier(self.dropout(x))
 
 
-def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds, mu=0.01):
-    """
-    本文设计的 FedLC-Ada 损失函数
-    1. Logit Adjustment (LA): 解决 Non-IID 导致的类别频率偏移
-    2. Proximal Term (FedProx): 限制本地模型对异构数据的过度拟合
-    """
+def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_round, total_rounds,
+                   mu=0.01, gamma=2.0, use_la=True, use_focal=True, use_decoupled_prox=True):
     device = outputs.device
-    # 动态温度系数：随训练轮次增加逐步强化 Logit 补偿
+
+    # ---------------------------------------------------------
+    # 1. Logit Adjustment (LA) - 线性平滑退火
+    # ---------------------------------------------------------
     tau = current_round / total_rounds
 
-    # pi_y: 本地类别的先验概率分布
-    pi_y = torch.clamp(label_dist.to(device), min=1e-6)
+    if use_la:
+        pi_y = torch.clamp(label_dist.to(device), min=1e-5)
+        margin = tau * torch.log(pi_y)
+        adjusted_outputs = outputs + margin
+    else:
+        adjusted_outputs = outputs
 
-    # $$ L_{comp} = f(x) + \tau \cdot \log(\pi_y) $$
-    margin = tau * torch.log(pi_y)
-    adjusted_outputs = outputs + margin
+    # ---------------------------------------------------------
+    # 2. Focal Loss
+    # ---------------------------------------------------------
+    if use_focal:
+        with torch.no_grad():
+            clean_probs = F.softmax(outputs, dim=1)
+            target_probs = clean_probs[range(labels.size(0)), labels]
 
-    ce_loss = F.cross_entropy(adjusted_outputs, labels)
+        focal_weight = (1.0 - target_probs) ** gamma
 
-    # Proximal Term
-    prox_loss = 0
-    if global_model is not None:
-        for p, g_p in zip(model.parameters(), global_model.parameters()):
-            prox_loss += (p - g_p).norm(2) ** 2
+        ce_loss = F.cross_entropy(adjusted_outputs, labels, reduction='none')
+        task_loss = (focal_weight * ce_loss).mean()
+    else:
+        task_loss = F.cross_entropy(adjusted_outputs, labels)
 
-    return ce_loss + (mu / 2) * prox_loss
+    # ---------------------------------------------------------
+    # 3. 解耦 Proximal Term
+    # ---------------------------------------------------------
+    prox_loss = 0.0
+    if global_model is not None and mu > 0:
+        local_freq = label_dist.to(device)
+        norm_freq = local_freq / (local_freq.max() + 1e-8)
+
+        for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
+            if use_decoupled_prox and 'classifier' in name:
+                class_penalty = mu * (1.5 - norm_freq)
+
+                if 'weight' in name:
+                    layer_loss = (class_penalty.view(-1, 1) * (p - g_p) ** 2).sum()
+                else:
+                    layer_loss = (class_penalty * (p - g_p) ** 2).sum()
+                prox_loss += layer_loss
+            else:
+                prox_loss += mu * (p - g_p).norm(2) ** 2
+
+    # FedProx 标准公式：0.5 * mu * ||w - w_t||^2
+    return task_loss + 0.5 * prox_loss
 
 
 # 为了兼容性保留 FedProx 实现作为对照

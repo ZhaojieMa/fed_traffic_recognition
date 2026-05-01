@@ -34,11 +34,11 @@ NUM_CLASSES = META["num_classes"]
 
 NUM_CLIENTS = 10
 EPOCHS_PER_ROUND = 5
-TOTAL_ROUNDS = 100    # 【核心修改】增加到 100 轮。联邦学习在复杂异构下收敛较慢，50 轮不足以让改进算法发力
-BATCH_SIZE = 32
+TOTAL_ROUNDS = 100  # 增加轮数以确保收敛[cite: 1]
+BATCH_SIZE = 64
 LEARNING_RATE = 0.001
-MU_PROX = 0.01
-MU_ADA = 0.01
+MU_PROX = 0.001
+MU_ADA = 0.001
 
 
 def load_global_test():
@@ -82,25 +82,35 @@ class TrafficClient(fl.client.NumPyClient):
         current_round = config.get("server_round", 1)
 
         global_model = None
-        if self.method in ["FedProx", "Proposed"]:
+        if self.method in ["FedProx", "Proposed", "DecoupledProx"]:
             global_model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
             global_model.load_state_dict(self.model.state_dict())
             global_model.eval()
 
         self.model.train()
-        loader = DataLoader(TensorDataset(self.X_train, self.y_train), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+        loader = DataLoader(TensorDataset(self.X_train, self.y_train), batch_size=BATCH_SIZE, shuffle=True,
+                            drop_last=True)
 
         for _ in range(EPOCHS_PER_ROUND):
             for bx, by in loader:
                 self.optimizer.zero_grad()
                 outputs = self.model(bx)
-                if self.method == "Proposed":
-                    # 核心修复：传入我们设定的 MU_ADA，而不是用原先的 0.5 锁死模型
-                    loss = fedlc_ada_loss(outputs, by, self.model, global_model, self.label_dist, current_round, TOTAL_ROUNDS, mu=MU_ADA)
+
+                # 消融与主实验路由[cite: 1]
+                if self.method == "FedAvg":
+                    loss = F.cross_entropy(outputs, by)
                 elif self.method == "FedProx":
                     loss = fedprox_loss(outputs, by, self.model, global_model, mu=MU_PROX)
-                else:
-                    loss = F.cross_entropy(outputs, by)
+                elif self.method == "LA":
+                    loss = fedlc_ada_loss(outputs, by, self.model, None, self.label_dist,
+                                          current_round, TOTAL_ROUNDS, mu=0, use_focal=False, use_decoupled_prox=False)
+                elif self.method == "DecoupledProx":
+                    loss = fedlc_ada_loss(outputs, by, self.model, global_model, self.label_dist,
+                                          current_round, TOTAL_ROUNDS, mu=MU_ADA, use_focal=False, use_la=False)
+                elif self.method == "Proposed":
+                    loss = fedlc_ada_loss(outputs, by, self.model, global_model, self.label_dist,
+                                          current_round, TOTAL_ROUNDS, mu=MU_ADA)
+                else : loss = F.cross_entropy(outputs, by)
                 loss.backward()
                 self.optimizer.step()
 
@@ -119,7 +129,9 @@ def get_evaluate_fn():
             true_y = GLOBAL_Y_TEST.cpu().numpy()
             acc = float(accuracy_score(true_y, preds))
             f1 = float(f1_score(true_y, preds, average='macro'))
-        return 0.0, {"accuracy": acc, "f1": f1}
+        acc_temp = round(acc, 4)
+        f1_temp = round(f1, 4)
+        return 0.0, {"accuracy": acc_temp, "f1": f1_temp}
 
     return evaluate
 
@@ -149,7 +161,8 @@ def centralized_baseline(alpha, split_type="proposed"):
         all_x.append(x)
         all_y.append(y)
 
-    loader = DataLoader(TensorDataset(torch.cat(all_x), torch.cat(all_y)), batch_size=BATCH_SIZE, shuffle=True,drop_last=True)
+    loader = DataLoader(TensorDataset(torch.cat(all_x), torch.cat(all_y)), batch_size=BATCH_SIZE, shuffle=True,
+                        drop_last=True)
     model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
@@ -176,7 +189,7 @@ def local_only_training(alpha, split_type="proposed"):
         model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
         optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
-        loader = DataLoader(TensorDataset(X, y), batch_size=BATCH_SIZE, shuffle=True,drop_last=True)
+        loader = DataLoader(TensorDataset(X, y), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
         model.train()
         for _ in range(TOTAL_ROUNDS * EPOCHS_PER_ROUND):
             for bx, by in loader:
@@ -202,15 +215,13 @@ if __name__ == "__main__":
         print(f"\n{'=' * 40}\n正在测试异构度 α = {alpha}\n{'=' * 40}")
         summary[str(alpha)] = {"simple": {}, "rwth": {}}
 
-        # 1. 运行 Simple (控制变量组：只有类别不均，没有长尾缺失)
-        sa_acc, sa_f1, sa_hist = run_experiment("FedAvg", alpha, "simple")
-        sp_acc, sp_f1, sp_hist = run_experiment("FedProx", alpha, "simple")
-        so_acc, so_f1, so_hist = run_experiment("Proposed", alpha, "simple")
-        summary[str(alpha)]["simple"]["FedAvg"] = {"acc": sa_acc, "f1": sa_f1, "hist": sa_hist}
-        summary[str(alpha)]["simple"]["FedProx"] = {"acc": sp_acc, "f1": sp_f1, "hist": sp_hist}
-        summary[str(alpha)]["simple"]["Proposed"] = {"acc": so_acc, "f1": so_f1, "hist": so_hist}
+        # 1. 运行 Simple (消融实验组)[cite: 2]
+        ablation_methods = ["FedAvg", "FedProx", "LA", "DecoupledProx", "Proposed"]
+        for m in ablation_methods:
+            acc, f1, hist = run_experiment(m, alpha, "simple")
+            summary[str(alpha)]["simple"][m] = {"acc": acc, "f1": f1, "hist": hist}
 
-        # 2. 运行 RWTH (实验组：全局长尾 + 极端异构的双重地狱)
+        # 2. 运行 RWTH (仅运行 Proposed 及基准)[cite: 2]
         l_acc, l_f1 = local_only_training(alpha, "rwth")
         c_acc, c_f1 = centralized_baseline(alpha, "rwth")
 

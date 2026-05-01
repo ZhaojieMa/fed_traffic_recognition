@@ -33,35 +33,74 @@ TARGET_FEATURES = [
     'flow_direction_changes', 'active_time', 'idle_time', 'active_packets', 'idle_packets'
 ]
 
+TASK_MODE = 'application'
+
 
 def get_clean_label(filename):
-    """
-    针对 Non-VPN 数据集的标签清洗逻辑优化
-    Non-VPN 数据集通常包含: Chat, Email, FTP, P2P, Streaming, VoIP, VPN_Chat...
-    """
-    name = file_name.lower()
+    name = filename.lower()
+    # 移除后缀
+    name = re.sub(r'\.(pcap|pcapng|csv)$', '', name)
 
-    # 1. 去除 VPN 前缀
-    if name.startswith("vpn_"):
-        name = name.replace("vpn_", "", 1)
+    # --- 1. 二分类逻辑 (Encapsulation: VPN vs Non-VPN) ---
+    is_vpn = 'vpn' in name
+    if TASK_MODE == 'binary':
+        return "VPN" if is_vpn else "Non-VPN"
 
-    # 2. 特殊处理：有些文件名没有下划线分隔，如 facebookchat1
-    # 我们先把已知的关键词标准化
-    keywords = ["aim_chat", "aimchat", "email", "facebook_chat", "facebookchat",
-                "facebook_audio", "facebook_video", "bittorrent", "ftps",
-                "hangouts_audio", "hangouts_chat"]
+    # --- 基础清理：移除 vpn_ 前缀和末尾数字/实验编号 ---
+    pure_name = re.sub(r'^vpn_', '', name)
+    pure_name = re.sub(r'_[ab]$', '', pure_name)
+    pure_name = re.sub(r'\d+[a-z]?$', '', pure_name)
 
-    # 统一转换常见的连写
-    name = name.replace("aimchat", "aim_chat")
-    name = name.replace("facebookchat", "facebook_chat")
+    # --- 2. 映射表定义 (基于图中的 Class 信息) ---
+    # 定义应用到类别的映射 (用于 6 分类)
+    app_to_category = {
+        'skype': 'Chat', 'icq': 'Chat', 'hangout': 'Chat', 'facebook': 'Chat', 'aim': 'Chat',
+        'email': 'Email', 'gmail': 'Email',
+        'netflix': 'Streaming', 'spotify': 'Streaming', 'vimeo': 'Streaming', 'youtube': 'Streaming',
+        'ftp': 'File_Transfer', 'sftp': 'File_Transfer', 'scp': 'File_Transfer', 'skype_files': 'File_Transfer',
+        'bittorrent': 'P2P',
+        'voipbuster': 'VoIP', 'hangouts_audio': 'VoIP'
+    }
 
-    # 3. 提取核心关键词 (匹配到即停止)
-    for kw in ["aim_chat", "email", "facebook_chat", "facebook_audio",
-               "facebook_video", "bittorrent", "ftps", "hangouts_audio", "hangouts_chat"]:
-        if kw in name:
-            return kw
+    # 定义应用标准化 (用于 16 分类)
+    # 确保文件名中的变体（如 youtubehtml5）指向图中的标准名称
+    app_norm = {
+        'youtube': 'YouTube', 'youtubehtml5': 'YouTube',
+        'facebook': 'Facebook',
+        'gmail': 'Gmail', 'google_mail': 'Gmail',
+        'skype': 'Skype', 'skype_chat': 'Skype', 'skype_video': 'Skype', 'skype_audio': 'Skype',
+        'hangouts': 'Hangout', 'hangout': 'Hangout', 'hangouts_chat': 'Hangout', 'hangouts_video': 'Hangout',
+        'aim': 'Aim', 'aimchat': 'Aim',
+        'icq': 'Icq', 'icqchat': 'Icq',
+        'ftps': 'SFTP', 'scp': 'SCP', 'ftp': 'FTP'
+    }
 
-    return "others"
+    # --- 3. 提取核心 App 名称 ---
+    # 提取第一个下划线前的单词作为 App 识别基础
+    parts = pure_name.split('_')
+    raw_app = parts[0]
+
+    # --- 4. 16分类逻辑 (Application) ---
+    if TASK_MODE == 'application':
+        # 尝试匹配标准化字典
+        for key, val in app_norm.items():
+            if key in pure_name: return val
+        # 兜底：返回首个识别到的单词并首字母大写
+        return raw_app.capitalize()
+
+    # --- 5. 6分类逻辑 (Category) ---
+    if TASK_MODE == 'category':
+        # 先标准化 app 名再映射
+        std_app = raw_app
+        for key, val in app_norm.items():
+            if key in pure_name:
+                std_app = val.lower()
+                break
+
+        # 返回对应的 Category
+        return app_to_category.get(std_app, "Chat")  # 默认归类为流量最大的 Chat
+
+    return pure_name
 
 
 def extract_flow_features(pcap_path, label_id):
