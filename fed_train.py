@@ -34,7 +34,7 @@ NUM_CLASSES = META["num_classes"]
 
 NUM_CLIENTS = 10
 EPOCHS_PER_ROUND = 5
-TOTAL_ROUNDS = 100  # 增加轮数以确保收敛[cite: 1]
+TOTAL_ROUNDS = 120  # 增加轮数以确保收敛[cite: 1]
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 MU_PROX = 0.001
@@ -216,7 +216,7 @@ if __name__ == "__main__":
         summary[str(alpha)] = {"simple": {}, "rwth": {}}
 
         # 1. 运行 Simple (消融实验组)[cite: 2]
-        ablation_methods = ["FedAvg", "FedProx", "LA", "DecoupledProx", "Proposed"]
+        ablation_methods = ["FedAvg", "FedProx", "DecoupledProx", "LA", "Proposed"]
         for m in ablation_methods:
             acc, f1, hist = run_experiment(m, alpha, "simple")
             summary[str(alpha)]["simple"][m] = {"acc": acc, "f1": f1, "hist": hist}

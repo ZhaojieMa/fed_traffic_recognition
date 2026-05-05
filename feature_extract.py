@@ -33,74 +33,129 @@ TARGET_FEATURES = [
     'flow_direction_changes', 'active_time', 'idle_time', 'active_packets', 'idle_packets'
 ]
 
-TASK_MODE = 'application'
+TASK_MODE = 'application' # Encapsulation|category|application
 
 
 def get_clean_label(filename):
     name = filename.lower()
-    # 移除后缀
     name = re.sub(r'\.(pcap|pcapng|csv)$', '', name)
 
-    # --- 1. 二分类逻辑 (Encapsulation: VPN vs Non-VPN) ---
-    is_vpn = 'vpn' in name
-    if TASK_MODE == 'binary':
-        return "VPN" if is_vpn else "Non-VPN"
-
-    # --- 基础清理：移除 vpn_ 前缀和末尾数字/实验编号 ---
+    # ===== 1. VPN 标记 =====
+    is_vpn = name.startswith('vpn_')
     pure_name = re.sub(r'^vpn_', '', name)
-    pure_name = re.sub(r'_[ab]$', '', pure_name)
+
+    # ===== 2. 去掉实验编号 =====
     pure_name = re.sub(r'\d+[a-z]?$', '', pure_name)
+    pure_name = re.sub(r'_[ab]$', '', pure_name)
 
-    # --- 2. 映射表定义 (基于图中的 Class 信息) ---
-    # 定义应用到类别的映射 (用于 6 分类)
-    app_to_category = {
-        'skype': 'Chat', 'icq': 'Chat', 'hangout': 'Chat', 'facebook': 'Chat', 'aim': 'Chat',
-        'email': 'Email', 'gmail': 'Email',
-        'netflix': 'Streaming', 'spotify': 'Streaming', 'vimeo': 'Streaming', 'youtube': 'Streaming',
-        'ftp': 'File_Transfer', 'sftp': 'File_Transfer', 'scp': 'File_Transfer', 'skype_files': 'File_Transfer',
-        'bittorrent': 'P2P',
-        'voipbuster': 'VoIP', 'hangouts_audio': 'VoIP'
-    }
+    # ===== 3. 二分类 =====
+    if TASK_MODE == 'Encapsulation':
+        return "VPN" if is_vpn else "NonVPN"
 
-    # 定义应用标准化 (用于 16 分类)
-    # 确保文件名中的变体（如 youtubehtml5）指向图中的标准名称
-    app_norm = {
-        'youtube': 'YouTube', 'youtubehtml5': 'YouTube',
-        'facebook': 'Facebook',
-        'gmail': 'Gmail', 'google_mail': 'Gmail',
-        'skype': 'Skype', 'skype_chat': 'Skype', 'skype_video': 'Skype', 'skype_audio': 'Skype',
-        'hangouts': 'Hangout', 'hangout': 'Hangout', 'hangouts_chat': 'Hangout', 'hangouts_video': 'Hangout',
-        'aim': 'Aim', 'aimchat': 'Aim',
-        'icq': 'Icq', 'icqchat': 'Icq',
-        'ftps': 'SFTP', 'scp': 'SCP', 'ftp': 'FTP'
-    }
+    # ===== 4. 应用识别 =====
+    app = None
+    traffic_type = None
 
-    # --- 3. 提取核心 App 名称 ---
-    # 提取第一个下划线前的单词作为 App 识别基础
-    parts = pure_name.split('_')
-    raw_app = parts[0]
+    # 识别应用
+    if "facebook" in pure_name:
+        app = "facebook"
+    elif "skype" in pure_name:
+        app = "skype"
+    elif "hangout" in pure_name:
+        app = "hangout"
+    elif "gmail" in pure_name:
+        app = "gmail"
+    elif "email" in pure_name:
+        app = "email"
+    elif "youtube" in pure_name:
+        app = "youtube"
+    elif "netflix" in pure_name:
+        app = "netflix"
+    elif "spotify" in pure_name:
+        app = "spotify"
+    elif "vimeo" in pure_name:
+        app = "vimeo"
+    elif "aim" in pure_name:
+        app = "aim"
+    elif "icq" in pure_name:
+        app = "icq"
+    elif "voipbuster" in pure_name:
+        app = "voipbuster"
+    elif "scp" in pure_name:
+        app = "scp"
+    elif "sftp" in pure_name:
+        app = "sftp"
+    elif "ftp" in pure_name:
+        app = "ftp"
+    elif "bittorrent" in pure_name:
+        app = "bittorrent"
 
-    # --- 4. 16分类逻辑 (Application) ---
+    # ===== 5. 识别流量类型 =====
+    if "audio" in pure_name:
+        traffic_type = "audio"
+    elif "video" in pure_name:
+        traffic_type = "video"
+    elif "chat" in pure_name:
+        traffic_type = "chat"
+    elif "file" in pure_name or "scp" in pure_name or "ftp" in pure_name:
+        traffic_type = "file"
+    else:
+        traffic_type = "default"
+
+    # ===== 6. 16分类 =====
     if TASK_MODE == 'application':
-        # 尝试匹配标准化字典
-        for key, val in app_norm.items():
-            if key in pure_name: return val
-        # 兜底：返回首个识别到的单词并首字母大写
-        return raw_app.capitalize()
 
-    # --- 5. 6分类逻辑 (Category) ---
+        app_map = {
+            "skype": "Skype",
+            "icq": "ICQ",
+            "hangout": "Hangout",
+            "facebook": "Facebook",
+            "email": "Email",
+            "gmail": "Gmail",
+            "ftp": "FTP",
+            "sftp": "SFTP",
+            "scp": "SCP",
+            "netflix": "Netflix",
+            "spotify": "Spotify",
+            "vimeo": "Vimeo",
+            "youtube": "YouTube",
+            "aim": "AIM Chat",
+            "voipbuster": "VOIPBuster",
+            "bittorrent": "BitTorrent"
+        }
+
+        if app in app_map:
+            return app_map[app]
+
+        return "Unknown"
+
+    # ===== 7. 6分类 =====
     if TASK_MODE == 'category':
-        # 先标准化 app 名再映射
-        std_app = raw_app
-        for key, val in app_norm.items():
-            if key in pure_name:
-                std_app = val.lower()
-                break
 
-        # 返回对应的 Category
-        return app_to_category.get(std_app, "Chat")  # 默认归类为流量最大的 Chat
+        if app in ["facebook", "skype", "hangout", "aim", "icq"]:
+            if traffic_type == "audio":
+                return "VoIP"
+            elif traffic_type == "file":
+                return "File Transfer"
+            else:
+                return "Chat"
 
-    return pure_name
+        elif app in ["email","gmail"]:
+            return "Email"
+
+        elif app in ["youtube", "netflix", "spotify", "vimeo"]:
+            return "Streaming"
+
+        elif app in ["scp", "sftp", "ftp"]:
+            return "File Transfer"
+
+        elif app in ["bittorrent"]:
+            return "P2P"
+
+        elif app in ["voipbuster"]:
+            return "VoIP"
+
+        return "Unknown"
 
 
 def extract_flow_features(pcap_path, label_id):

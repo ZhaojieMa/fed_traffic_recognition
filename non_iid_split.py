@@ -125,12 +125,14 @@ if __name__ == "__main__":
     df['label'] = le.fit_transform(df['label'].astype(str))
 
     class_counts = df['label'].value_counts()
-    test_samples_per_class = min(100, max(class_counts.min() // 3, 5))
+    test_samples_per_class = min(1500, max(class_counts.min() // 2, 50))
 
     test_dfs, train_dfs = [], []
     for cls in class_counts.index:
         cls_df = df[df['label'] == cls]
-        test_df_cls = cls_df.sample(n=test_samples_per_class, random_state=42)
+        # 针对极度稀有类做安全处理
+        n_test = min(test_samples_per_class, len(cls_df) - 5)
+        test_df_cls = cls_df.sample(n=max(n_test, 1), random_state=42)
         test_dfs.append(test_df_cls)
         train_dfs.append(cls_df.drop(test_df_cls.index))
 
@@ -142,22 +144,33 @@ if __name__ == "__main__":
     test_df[feature_cols] = scaler.transform(test_df[feature_cols])
     test_df.to_csv("./dataset/global_test.csv", index=False)
 
-    TARGET_TOTAL = 12000
-    TOTAL_SAMPLES_TO_USE = min(TARGET_TOTAL, int(len(train_df) * 0.8))
-    ZIPF_ALPHA = 1.5
+    print(f"测试集构建完成: 共 {len(test_df)} 条样本")
+
+    # === 2. 学术级更正：释放数据量潜力 ===
+    # RWTH 组：保持极端长尾，但提高总量，让头部应用可学习
+    TARGET_TOTAL = 150000
+    TOTAL_SAMPLES_TO_USE = min(TARGET_TOTAL, int(len(train_df) * 0.9))
+    ZIPF_ALPHA = 1.25  # 1.25 是网络流量服从 Zipf 定律的一个经典经验值
 
     num_clients = 10
     alphas = [0.5]
     num_classes = len(le.classes_)
 
+    # Simple 组：作为基线上限，使用海量数据验证纯粹的 Dirichlet 偏移
+    TARGET_SIMPLE = 250000
+    train_df_simple = train_df.sample(n=min(TARGET_SIMPLE, len(train_df)), random_state=42)
+
+    # 构造 RWTH 长尾分布
     train_df_rwth = make_global_long_tail(train_df, total_samples=TOTAL_SAMPLES_TO_USE, zipf_alpha=ZIPF_ALPHA)
-    train_df_simple = train_df.sample(n=len(train_df_rwth), random_state=42)
+
+    print(f"Simple组采样: {len(train_df_simple)} | RWTH组采样: {len(train_df_rwth)}")
 
     for alpha in alphas:
         splits = {
             "simple": (train_df_simple, simple_dirichlet_split(train_df_simple['label'].values, num_clients, alpha)),
-            # 实验组：应用本文设计的真实流量混合划分！
-            "rwth": (train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.01))
+            # 提升 noise_ratio 至 0.05，适度增加全局重合度，防止图结构完全断裂
+            "rwth": (
+            train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.05))
         }
 
         for split_type, (base_df, client_indices) in splits.items():

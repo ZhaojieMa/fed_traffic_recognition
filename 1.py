@@ -613,71 +613,157 @@
 #                 prox_loss += layer_mu * (p - g_p).norm(2) ** 2
 #
 #         return task_loss + 0.5 * prox_loss
-def fedlc_ada_loss(outputs, labels, model, global_model, label_dist,
-                   current_round, total_rounds,
-                   mu=0.001, gamma=2.0,
-                   use_la=True, use_focal=True, use_decoupled_prox=True):
+import nfstream
+import pandas as pd
+import numpy as np
+import os
+import json
+import warnings
+import re
 
-    device = outputs.device
-    tau = current_round / total_rounds
+warnings.filterwarnings('ignore')
 
-    # =========================
-    # ✅ 1. 正确的 LA（用 batch 分布，不是 client 分布）
-    # =========================
-    if use_la:
-        num_classes = outputs.shape[1]
+TARGET_FEATURES = [
+    'bidirectional_duration_ms', 'src2dst_duration_ms', 'dst2src_duration_ms',
+    'bidirectional_first_seen_ms', 'bidirectional_last_seen_ms',
+    'src2dst_first_seen_ms', 'src2dst_last_seen_ms',
+    'dst2src_first_seen_ms', 'dst2src_last_seen_ms',
+    'bidirectional_packets', 'src2dst_packets', 'dst2src_packets',
+    'bidirectional_bytes', 'src2dst_bytes', 'dst2src_bytes',
+    'bidirectional_duration_stddev', 'bidirectional_packet_size_mean',
+    'bidirectional_packet_size_stddev', 'bidirectional_packet_size_min',
+    'bidirectional_packet_size_max', 'bidirectional_packet_size_mode',
+    'src2dst_packet_size_mean', 'src2dst_packet_size_stddev',
+    'dst2src_packet_size_mean', 'dst2src_packet_size_stddev',
+    'bidirectional_packet_time_mean', 'bidirectional_packet_time_stddev',
+    'src2dst_packet_time_mean', 'src2dst_packet_time_stddev',
+    'dst2src_packet_time_mean', 'dst2src_packet_time_stddev',
+    'src2dst_min_ps', 'src2dst_max_ps', 'dst2src_min_ps', 'dst2src_max_ps',
+    'src2dst_min_ipi', 'src2dst_max_ipi', 'dst2src_min_ipi', 'dst2src_max_ipi',
+    'flow_direction_changes', 'active_time', 'idle_time', 'active_packets', 'idle_packets'
+]
 
-        # 计算 batch 内真实分布（关键修复）
-        batch_hist = torch.bincount(labels, minlength=num_classes).float().to(device)
-        batch_dist = batch_hist / (batch_hist.sum() + 1e-8)
+# ===== 修改为针对新数据集的10分类 =====
+TASK_MODE = '10_class'
 
-        margin = tau * torch.log(batch_dist + 1e-5)
-        adjusted_outputs = outputs + margin
+
+def get_clean_label(filename):
+    """
+    针对新数据集的 10 分类映射逻辑
+    将忽略大小写，并自动合并带有 -1, -2 等后缀的同一应用流量
+    """
+    name = filename.lower()
+
+    # 按照提供的10个基础应用类别进行关键词匹配
+    if "bittorrent" in name:
+        return "BitTorrent"
+    elif "facetime" in name:
+        return "Facetime"
+    elif "ftp" in name:
+        return "FTP"
+    elif "gmail" in name:
+        return "Gmail"
+    elif "mysql" in name:
+        return "MySQL"
+    elif "outlook" in name:
+        return "Outlook"
+    elif "skype" in name:
+        return "Skype"
+    elif "smb" in name:
+        return "SMB"  # 会自动匹配 SMB-1, SMB-2
+    elif "weibo" in name:
+        return "Weibo"  # 会自动匹配 Weibo-1 到 Weibo-4
+    elif "worldofwarcraft" in name:
+        return "WorldOfWarcraft"
+
+    return "Unknown"
+
+
+def extract_flow_features(pcap_path, label_id):
+    try:
+        streamer = nfstream.NFStreamer(
+            source=pcap_path,
+            statistical_analysis=True,
+            splt_analysis=True,
+            n_meters=0,
+            performance_report=False,
+            idle_timeout=60,
+            active_timeout=300
+        )
+        df = streamer.to_pandas()
+        if df.empty:
+            return pd.DataFrame()
+
+        drop_cols = [
+            'id', 'src_ip', 'src_mac', 'src_oui', 'src_port',
+            'dst_ip', 'dst_mac', 'dst_oui', 'dst_port',
+            'application_name', 'application_category_name', 'category_name',
+            'client_fingerprint', 'server_fingerprint', 'requested_server_name',
+            'application_is_guessed', 'vlan_id', 'tunnel_id',
+            'entry_type'
+        ]
+        df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
+
+        missing_cols = [col for col in TARGET_FEATURES if col not in df.columns]
+        if missing_cols:
+            for col in missing_cols:
+                df[col] = 0.0
+
+        df = df[TARGET_FEATURES]
+        df = df.select_dtypes(include=['number'])
+        df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+        # 进行 log(1+x) 处理以平滑特征分布
+        df = np.log1p(df)
+
+        df['label'] = label_id
+        return df
+    except Exception as e:
+        print(f"处理PCAP文件出错 {pcap_path}：{str(e)}")
+        return pd.DataFrame()
+
+
+if __name__ == "__main__":
+    # 请根据您的实际路径进行修改
+    target_dir = "D:/USTC-TFC2016"
+
+    all_features = []
+    label_to_id = {}
+    next_id = 0
+
+    if os.path.exists(target_dir):
+        pcap_files = [f for f in os.listdir(target_dir) if f.endswith('.pcap') or f.endswith('.pcapng')]
+
+        # 第一次遍历：确定类别映射
+        for file_name in pcap_files:
+            clean_name = get_clean_label(file_name)
+            if clean_name not in label_to_id:
+                label_to_id[clean_name] = next_id
+                next_id += 1
+
+        print(f"检测到聚合后的类别总数: {next_id} (预期为10分类)")
+        print("类别映射详情:", json.dumps(label_to_id, indent=4))
+
+        # 第二次遍历：提取特征
+        for file_name in pcap_files:
+            clean_name = get_clean_label(file_name)
+            class_id = label_to_id[clean_name]
+            pcap_path = os.path.join(target_dir, file_name)
+            print(f"处理中: {file_name} -> 聚合标签: {clean_name} (ID: {class_id})")
+            df = extract_flow_features(pcap_path, class_id)
+            if not df.empty:
+                all_features.append(df)
+
+        if all_features:
+            final_df = pd.concat(all_features, ignore_index=True)
+
+            os.makedirs("./dataset", exist_ok=True)
+            final_df.to_csv("./dataset/traffic_features.csv", index=False)
+
+            # 保存元数据
+            with open("./dataset/label_map.json", "w") as f:
+                json.dump(label_to_id, f, indent=4)
+
+            print(f"特征提取成功！样本数: {len(final_df)}，聚合后类别数: {next_id}")
     else:
-        adjusted_outputs = outputs
-
-    # =========================
-    # ✅ 2. Focal Loss（延迟启动，避免前期冻结）
-    # =========================
-    if use_focal:
-        if current_round < total_rounds * 0.3:
-            # 前30%轮：完全关闭 focal
-            task_loss = F.cross_entropy(adjusted_outputs, labels)
-        else:
-            with torch.no_grad():
-                probs = F.softmax(outputs, dim=1)
-                pt = probs[range(labels.size(0)), labels]
-
-            dynamic_gamma = gamma * (tau - 0.3) / 0.7  # 从0慢慢升到gamma
-            focal_weight = (1.0 - pt) ** dynamic_gamma
-
-            ce = F.cross_entropy(adjusted_outputs, labels, reduction='none')
-            task_loss = (focal_weight * ce).mean()
-    else:
-        task_loss = F.cross_entropy(adjusted_outputs, labels)
-
-    # =========================
-    # ✅ 3. Decoupled Prox（强度大幅降低 + 延迟）
-    # =========================
-    prox_loss = 0.0
-
-    if global_model is not None and mu > 0:
-
-        # 🔥 关键：前40轮不加prox（否则直接压死）
-        if current_round < total_rounds * 0.4:
-            return task_loss
-
-        for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
-
-            if use_decoupled_prox and 'classifier' in name:
-
-                # 🔥 关键：弱化类别惩罚（否则直接崩）
-                if 'weight' in name:
-                    prox_loss += (p - g_p).pow(2).sum() * mu * 0.5
-                else:
-                    prox_loss += (p - g_p).pow(2).sum() * mu * 0.5
-
-            else:
-                prox_loss += mu * (p - g_p).pow(2).sum()
-
-    return task_loss + 0.5 * prox_loss
+        print(f"路径 {target_dir} 不存在，请检查文件夹路径。")

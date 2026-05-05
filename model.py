@@ -95,22 +95,33 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
     # ---------------------------------------------------------
     prox_loss = 0.0
     if global_model is not None and mu > 0:
+        device = outputs.device
         local_freq = label_dist.to(device)
         norm_freq = local_freq / (local_freq.max() + 1e-8)
 
+        # 动态退火系数：随训练轮数增加，整体 Prox 约束从 1.0 降到 0.5
+        # 目的：训练后期允许模型进行微调，解决 metrics_8.json 中后期的震荡和停滞
+        tau_t = 1.0 - 0.5 * (current_round / total_rounds)
+
         for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
+            # 1. 针对分类头 (classifier.weight/bias)
             if use_decoupled_prox and 'classifier' in name:
-                class_penalty = mu * (1.5 - norm_freq)
+                # 核心：逆频率保护（防止少数类被擦除）
+                # 惩罚系数范围：少数类 ≈ 3*mu, 多数类 ≈ 1*mu
+                class_penalty = mu * (1.0 + 2.0 * (1.0 - norm_freq)) * tau_t
 
                 if 'weight' in name:
-                    layer_loss = (class_penalty.view(-1, 1) * (p - g_p) ** 2).sum()
+                    # 针对 Linear 层的 Weight 形状处理
+                    prox_loss += (class_penalty.view(-1, 1) * (p - g_p) ** 2).sum()
                 else:
-                    layer_loss = (class_penalty * (p - g_p) ** 2).sum()
-                prox_loss += layer_loss
-            else:
-                prox_loss += mu * (p - g_p).norm(2) ** 2
+                    prox_loss += (class_penalty * (p - g_p) ** 2).sum()
 
-    # FedProx 标准公式：0.5 * mu * ||w - w_t||^2
+            # 2. 针对 Backbone (日志中的 input_layer, res, se, proj 等)
+            else:
+                # 改进点：对特征层使用更轻的约束 (0.1 * mu)
+                # 理由：特征提取层需要灵活性来适应 Non-IID 数据
+                prox_loss += (mu * 0.1 * tau_t) * (p - g_p).pow(2).sum()
+
     return task_loss + 0.5 * prox_loss
 
 

@@ -48,21 +48,21 @@ def plot_heatmap(alpha="0.5"):
     # 图1：对照组
     sns.heatmap(mat_simple_log, ax=axes[0], cmap="YlGnBu", vmin=vmin, vmax=vmax,
                 linewidths=0.5, linecolor='gray', cbar_kws={'label': 'Log(样本数 + 1)'})
-    axes[0].set_title(f"对照组 (Simple): 纯 Dirichlet 分布 (α={alpha})\n各节点数据总量相近，仅标签倾斜", fontsize=14,
-                      fontweight='bold')
+    # axes[0].set_title(f"对照组 (Simple): 纯 Dirichlet 分布 (α={alpha})\n各节点数据总量相近，仅标签倾斜", fontsize=14,
+    #                   fontweight='bold')
     axes[0].set_xlabel("类别 (Class ID)", fontsize=12)
     axes[0].set_ylabel("客户端 (Client ID)", fontsize=12)
 
     # 图2：实验组
     sns.heatmap(mat_rwth_log, ax=axes[1], cmap="YlGnBu", vmin=vmin, vmax=vmax,
                 linewidths=0.5, linecolor='gray', cbar_kws={'label': 'Log(样本数 + 1)'})
-    axes[1].set_title(f"实验组 (RWTH): 真实流量异构 (α={alpha})\n引入对数正态的数量崩溃，出现大量微型孤岛节点",
-                      fontsize=14, fontweight='bold')
+    # axes[1].set_title(f"实验组 (RWTH): 真实流量异构 (α={alpha})\n引入对数正态的数量崩溃，出现大量微型孤岛节点",
+    #                   fontsize=14, fontweight='bold')
     axes[1].set_xlabel("类别 (Class ID)", fontsize=12)
     axes[1].set_ylabel("客户端 (Client ID)", fontsize=12)
 
-    plt.suptitle("联邦学习数据异构挑战：单纯 Dirichlet vs 真实场景(RWTH) 的客户端绝对数据量分布对比", fontsize=16,
-                 fontweight='bold', y=1.05)
+    # plt.suptitle("联邦学习数据异构挑战：单纯 Dirichlet vs 真实场景(RWTH) 的客户端绝对数据量分布对比", fontsize=16,
+    #              fontweight='bold', y=1.05)
     plt.tight_layout()
     plt.savefig(f"./results/plot1_heatmap_alpha_{alpha}.png", dpi=300, bbox_inches='tight')
 
@@ -85,7 +85,7 @@ def plot_histogram_and_coverage(alpha="0.5"):
     # 直方图
     x = np.arange(10)
     axes[0].bar(x - 0.2, cls_per_client_s, 0.4, label="单纯 Dirichlet", color='lightgray')
-    axes[0].bar(x + 0.2, cls_per_client_p, 0.4, label="本文改进", color='coral')
+    axes[0].bar(x + 0.2, cls_per_client_p, 0.4, label="本文划分", color='coral')
     axes[0].set_title("图2：每个客户端拥有的类别数量对比", fontweight='bold')
     axes[0].set_xlabel("客户端 ID")
     axes[0].set_ylabel("类别数量")
@@ -94,7 +94,7 @@ def plot_histogram_and_coverage(alpha="0.5"):
 
     # 覆盖曲线
     axes[1].plot(client_per_cls_s, marker='o', linestyle='--', color='gray', label="单纯 Dirichlet")
-    axes[1].plot(client_per_cls_p, marker='s', linewidth=2, color='coral', label="本文改进")
+    axes[1].plot(client_per_cls_p, marker='s', linewidth=2, color='coral', label="本文划分")
     axes[1].set_title("图3：类别在全局客户端中的覆盖率", fontweight='bold')
     axes[1].set_xlabel("类别 ID")
     axes[1].set_ylabel("包含该类的客户端数量")
@@ -149,8 +149,8 @@ def plot_convergence(data, alpha="0.5"):
 
 def plot_classic_bar(data, alpha="0.5"):
     """原版柱状图修复"""
-    methods = [ "FedAvg", "FedProx", "本文方法(FedLC-Ada)"]
-    keys = ["FedAvg", "FedProx", "Proposed"]
+    methods = [ "Local","FedAvg", "FedProx", "本文方法(FedLC-Ada)","Centralized"]
+    keys = ["Local","FedAvg", "FedProx", "Proposed","Centralized"]
 
     accs = [data[alpha]["rwth"][k]["acc"] for k in keys]
     f1s = [data[alpha]["rwth"][k]["f1"] for k in keys]
@@ -237,11 +237,10 @@ def plot_ablation_study(data, alpha="0.5"):
 
     # 定义各组的颜色和线型，突出 Proposed
     configs = {
-        "FedAvg": {"color": "#7f8c8d", "ls": "--", "lw": 2, "label": "1. FedAvg (基线)"},
-        "FedProx": {"color": "#3498db", "ls": "-.", "lw": 2, "label": "2. FedProx (常规近端约束)"},
-        "LA": {"color": "#f39c12", "ls": "-", "lw": 2.5, "label": "3. Focal-LA (长尾调整)"},
-        "DecoupledProx": {"color": "#8e44ad", "ls": "-", "lw": 2.5, "label": "4. DecoupledProx (分层解耦约束)"},
-        "Proposed": {"color": "#c0392b", "ls": "-", "lw": 4, "label": "5. 本文方法 (Proposed: 全套方案)"}
+        "FedProx": {"color": "#3498db", "ls": "-.", "lw": 2, "label": "1. FedProx"},
+        "LA": {"color": "#f39c12", "ls": "-", "lw": 2.5, "label": "2. Focal-LA"},
+        "DecoupledProx": {"color": "#8e44ad", "ls": "-", "lw": 2.5, "label": "3. DecoupledProx"},
+        "Proposed": {"color": "#c0392b", "ls": "-", "lw": 4, "label": "4. Proposed"}
     }
 
     rounds = None
@@ -260,7 +259,7 @@ def plot_ablation_study(data, alpha="0.5"):
 
     # 重点：标注最终增益
     final_acc_prop = rwth_data["Proposed"]["acc"]
-    final_acc_avg = rwth_data["FedAvg"]["acc"]
+    final_acc_avg = rwth_data["FedProx"]["acc"]
     total_gain = (final_acc_prop - final_acc_avg) * 100
 
     plt.annotate(f'总性能增益: +{total_gain:.1f}%',
