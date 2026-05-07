@@ -39,7 +39,12 @@ BATCH_SIZE = 64
 LEARNING_RATE = 0.001
 MU_PROX = 0.001
 MU_ADA = 0.001
+DIRICHLET_ALPHAS = [0.3, 0.5, 0.7, 0.9]
 
+# 通信效率统计：以 FedAvg 第 100 轮 Accuracy 作为基准
+COMM_BASELINE_METHOD = "FedAvg"
+COMM_BASELINE_ROUND = 100
+COMM_METHODS = ["FedAvg", "FedProx", "Proposed"]
 
 def load_global_test():
     df = pd.read_csv("./dataset/global_test.csv")
@@ -50,6 +55,103 @@ def load_global_test():
 
 GLOBAL_X_TEST, GLOBAL_Y_TEST = load_global_test()
 
+def get_post_round_metric_pairs(history, metric_name):
+    """
+    从 Flower 的 History 中提取中心化评估指标。
+    只保留 server_round > 0 的通信轮次，避免把第 0 轮初始评估计入通信轮次。
+    """
+    pairs = history.metrics_centralized.get(metric_name, [])
+    pairs = [(int(server_round), float(value)) for server_round, value in pairs]
+    post_round_pairs = [(server_round, value) for server_round, value in pairs if server_round > 0]
+    return post_round_pairs if post_round_pairs else pairs
+
+
+def result_round_pairs(result):
+    """
+    将 summary 中保存的 hist 与 hist_rounds 还原为 (round, accuracy) 对。
+    若旧结果中没有 hist_rounds，则默认 hist 第一个点对应第 1 轮。
+    """
+    hist = result.get("hist", [])
+    hist_rounds = result.get("hist_rounds", [])
+
+    if hist_rounds and len(hist_rounds) == len(hist):
+        return [(int(r), float(v)) for r, v in zip(hist_rounds, hist)]
+
+    return [(i, float(v)) for i, v in enumerate(hist, start=1)]
+
+
+def accuracy_at_round(round_acc_pairs, target_round):
+    """
+    获取指定通信轮次的准确率。
+    若不存在精确轮次，则使用小于等于 target_round 的最近一次评估结果。
+    """
+    if not round_acc_pairs:
+        return None
+
+    round_acc_pairs = sorted(round_acc_pairs, key=lambda x: x[0])
+
+    for server_round, acc in round_acc_pairs:
+        if server_round == target_round:
+            return float(acc)
+
+    previous = [(r, a) for r, a in round_acc_pairs if r <= target_round]
+    if previous:
+        return float(previous[-1][1])
+
+    return None
+
+
+def first_round_to_accuracy(round_acc_pairs, target_acc):
+    """
+    统计首次达到或超过 target_acc 的通信轮次。
+    若训练结束仍未达到，则返回 None。
+    """
+    for server_round, acc in sorted(round_acc_pairs, key=lambda x: x[0]):
+        if server_round > 0 and acc + 1e-12 >= target_acc:
+            return int(server_round)
+    return None
+
+
+def add_rwth_communication_efficiency(rwth_results):
+    """
+    在 rwth_results 中直接加入通信效率统计结果。
+    基准：RWTH 场景下 FedAvg 第 COMM_BASELINE_ROUND 轮 Accuracy。
+    统计：FedAvg、FedProx、Proposed 首次达到该 Accuracy 所需通信轮次。
+    """
+    fedavg_result = rwth_results.get(COMM_BASELINE_METHOD)
+    if fedavg_result is None:
+        print("[通信效率] 未找到 FedAvg 结果，跳过通信效率统计。")
+        return
+
+    fedavg_pairs = result_round_pairs(fedavg_result)
+    baseline_acc = accuracy_at_round(fedavg_pairs, COMM_BASELINE_ROUND)
+
+    if baseline_acc is None:
+        print(f"[通信效率] 未找到 FedAvg 第 {COMM_BASELINE_ROUND} 轮准确率，跳过通信效率统计。")
+        return
+
+    rounds_to_baseline = {}
+
+    for method in COMM_METHODS:
+        method_result = rwth_results.get(method)
+        if method_result is None:
+            rounds_to_baseline[method] = None
+            continue
+
+        method_pairs = result_round_pairs(method_result)
+        rounds_to_baseline[method] = first_round_to_accuracy(method_pairs, baseline_acc)
+
+    rwth_results["communication_efficiency"] = {
+        "baseline_method": COMM_BASELINE_METHOD,
+        "baseline_round": COMM_BASELINE_ROUND,
+        "baseline_accuracy": baseline_acc,
+        "rounds_to_baseline_accuracy": rounds_to_baseline
+    }
+
+    print(f"\n[通信效率] RWTH 基准：FedAvg 第 {COMM_BASELINE_ROUND} 轮 Accuracy = {baseline_acc:.4f}")
+    for method, round_num in rounds_to_baseline.items():
+        display_name = "FedLC-Ada" if method == "Proposed" else method
+        print(f"[通信效率] {display_name} 达到基准准确率所需通信轮次：{round_num}")
 
 def load_client_data(client_id, alpha, split_type):
     data_path = f"./dataset/{split_type}_alpha_{alpha}/client_{client_id}.csv"
@@ -144,13 +246,22 @@ def run_experiment(method, alpha, split_type="proposed"):
     )
     history = fl.simulation.start_simulation(
         client_fn=lambda cid: TrafficClient(int(cid), alpha, method, split_type).to_client(),
-        num_clients=NUM_CLIENTS, config=fl.server.ServerConfig(num_rounds=TOTAL_ROUNDS),
-        strategy=strategy, client_resources={"num_cpus": 1, "num_gpus": 0.2 if torch.cuda.is_available() else 0}
+        num_clients=NUM_CLIENTS,
+        config=fl.server.ServerConfig(num_rounds=TOTAL_ROUNDS),
+        strategy=strategy,
+        client_resources={"num_cpus": 1, "num_gpus": 0.2 if torch.cuda.is_available() else 0}
     )
-    final_acc = history.metrics_centralized["accuracy"][-1][1]
-    final_f1 = history.metrics_centralized["f1"][-1][1]
-    acc_hist = [val for _, val in history.metrics_centralized["accuracy"]]
-    return final_acc, final_f1, acc_hist
+
+    acc_pairs = get_post_round_metric_pairs(history, "accuracy")
+    f1_pairs = get_post_round_metric_pairs(history, "f1")
+
+    final_acc = acc_pairs[-1][1]
+    final_f1 = f1_pairs[-1][1]
+
+    acc_rounds = [server_round for server_round, _ in acc_pairs]
+    acc_hist = [val for _, val in acc_pairs]
+
+    return final_acc, final_f1, acc_hist, acc_rounds
 
 
 def centralized_baseline(alpha, split_type="proposed"):
@@ -208,33 +319,65 @@ def local_only_training(alpha, split_type="proposed"):
 
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
-    alphas = [0.5]
+
+    alphas = DIRICHLET_ALPHAS
     summary = {}
 
     for alpha in alphas:
         print(f"\n{'=' * 40}\n正在测试异构度 α = {alpha}\n{'=' * 40}")
         summary[str(alpha)] = {"simple": {}, "rwth": {}}
 
-        # 1. 运行 Simple (消融实验组)[cite: 2]
+        # 1. 运行 Simple 消融实验组
         ablation_methods = ["FedAvg", "FedProx", "DecoupledProx", "LA", "Proposed"]
-        for m in ablation_methods:
-            acc, f1, hist = run_experiment(m, alpha, "simple")
-            summary[str(alpha)]["simple"][m] = {"acc": acc, "f1": f1, "hist": hist}
 
-        # 2. 运行 RWTH (仅运行 Proposed 及基准)[cite: 2]
+        for m in ablation_methods:
+            acc, f1, hist, hist_rounds = run_experiment(m, alpha, "simple")
+            summary[str(alpha)]["simple"][m] = {
+                "acc": acc,
+                "f1": f1,
+                "hist": hist,
+                "hist_rounds": hist_rounds
+            }
+
+        # 2. 运行 RWTH 主实验组
         l_acc, l_f1 = local_only_training(alpha, "rwth")
         c_acc, c_f1 = centralized_baseline(alpha, "rwth")
 
-        pa_acc, pa_f1, pa_hist = run_experiment("FedAvg", alpha, "rwth")
-        pp_acc, pp_f1, pp_hist = run_experiment("FedProx", alpha, "rwth")
-        po_acc, po_f1, po_hist = run_experiment("Proposed", alpha, "rwth")
+        pa_acc, pa_f1, pa_hist, pa_rounds = run_experiment("FedAvg", alpha, "rwth")
+        pp_acc, pp_f1, pp_hist, pp_rounds = run_experiment("FedProx", alpha, "rwth")
+        po_acc, po_f1, po_hist, po_rounds = run_experiment("Proposed", alpha, "rwth")
 
-        summary[str(alpha)]["rwth"]["Local"] = {"acc": l_acc, "f1": l_f1}
-        summary[str(alpha)]["rwth"]["Centralized"] = {"acc": c_acc, "f1": c_f1}
-        summary[str(alpha)]["rwth"]["FedAvg"] = {"acc": pa_acc, "f1": pa_f1, "hist": pa_hist}
-        summary[str(alpha)]["rwth"]["FedProx"] = {"acc": pp_acc, "f1": pp_f1, "hist": pp_hist}
-        summary[str(alpha)]["rwth"]["Proposed"] = {"acc": po_acc, "f1": po_f1, "hist": po_hist}
+        summary[str(alpha)]["rwth"]["Local"] = {
+            "acc": l_acc,
+            "f1": l_f1
+        }
+        summary[str(alpha)]["rwth"]["Centralized"] = {
+            "acc": c_acc,
+            "f1": c_f1
+        }
+        summary[str(alpha)]["rwth"]["FedAvg"] = {
+            "acc": pa_acc,
+            "f1": pa_f1,
+            "hist": pa_hist,
+            "hist_rounds": pa_rounds
+        }
+        summary[str(alpha)]["rwth"]["FedProx"] = {
+            "acc": pp_acc,
+            "f1": pp_f1,
+            "hist": pp_hist,
+            "hist_rounds": pp_rounds
+        }
+        summary[str(alpha)]["rwth"]["Proposed"] = {
+            "acc": po_acc,
+            "f1": po_f1,
+            "hist": po_hist,
+            "hist_rounds": po_rounds
+        }
 
-    with open("./results/metrics.json", "w", encoding='utf-8') as f:
+        # 3. 在 RWTH 结果中补充通信效率统计
+        add_rwth_communication_efficiency(summary[str(alpha)]["rwth"])
+
+    with open("./results/metrics.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=4, ensure_ascii=False)
+
     print("\n所有实验数据已保存，请运行 analysis.py")

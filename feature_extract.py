@@ -163,7 +163,7 @@ def extract_flow_features(pcap_path, label_id):
         streamer = nfstream.NFStreamer(
             source=pcap_path,
             statistical_analysis=True,
-            splt_analysis=True,  # 开启包长/时间间隔序列分析，这对 Non-VPN 至关重要
+            splt_analysis=True,  # 启用 NFStream 的统计分析与 SPLT 分析能力，提取包大小和包间时间相关统计量。
             n_meters=0,
             performance_report=False,
             idle_timeout=60,

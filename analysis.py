@@ -127,15 +127,15 @@ def plot_convergence(data, alpha="0.5"):
     plt.plot(rounds, hist_simple_avg, ':', color='#3498db', linewidth=2.5, alpha=0.6, label="FedAvg (单纯 Dirichlet)")
     plt.plot(rounds, hist_simple_prox, ':', color='#2ecc71', linewidth=2.5, alpha=0.6, label="FedProx (单纯 Dirichlet)")
     plt.plot(rounds, hist_simple_prop, ':', color='#e74c3c', linewidth=2.5, alpha=0.6,
-             label="Proposed (单纯 Dirichlet)")
+             label="FedLC-Ada (单纯 Dirichlet)")
 
     # ================= 2. 绘制 RWTH 组 (实验组：实线，颜色加深加粗) =================
     plt.plot(rounds, hist_rwth_avg, '-', color='#2980b9', linewidth=2, label="FedAvg (极限 RWTH)")
     plt.plot(rounds, hist_rwth_prox, '-', color='#27ae60', linewidth=2, label="FedProx (极限 RWTH)")
-    plt.plot(rounds, hist_rwth_prop, '-', color='#c0392b', linewidth=3.5, label="本文方法 FedLC-Ada (极限 RWTH)")
+    plt.plot(rounds, hist_rwth_prop, '-', color='#c0392b', linewidth=3.5, label="FedLC-Ada (极限 RWTH)")
 
-    plt.title(f"图4：不同数据异构程度下各算法的收敛曲线对比 (α={alpha})\n(实线 vs 虚线展示环境恶化带来的性能冲击)",
-              fontsize=15, fontweight='bold')
+    # plt.title(f"图4：不同数据异构程度下各算法的收敛曲线对比 (α={alpha})\n(实线 vs 虚线展示环境恶化带来的性能冲击)",
+    #           fontsize=15, fontweight='bold')
     plt.xlabel("通信轮数 (Rounds)", fontsize=12)
     plt.ylabel("全局测试集准确率 (Accuracy)", fontsize=12)
 
@@ -274,6 +274,116 @@ def plot_ablation_study(data, alpha="0.5"):
     plt.tight_layout()
     plt.savefig("./results/plot6_ablation_final.png", dpi=300)
 
+def get_rounds_to_baseline_from_hist(method_result, baseline_acc):
+    """
+    兼容旧 metrics.json：
+    如果没有 communication_efficiency，则根据 hist 重新计算首次达到基准准确率的轮次。
+    """
+    hist = method_result.get("hist", [])
+    hist_rounds = method_result.get("hist_rounds", [])
+
+    if hist_rounds and len(hist_rounds) == len(hist):
+        pairs = zip(hist_rounds, hist)
+    else:
+        pairs = enumerate(hist, start=1)
+
+    for r, acc in pairs:
+        if float(acc) + 1e-12 >= baseline_acc:
+            return int(r)
+
+    return None
+
+
+def plot_communication_efficiency(data):
+    """
+    绘制 RWTH 场景下不同 Dirichlet α 下的通信效率对比图。
+    基准：FedAvg 第80轮 Accuracy。
+    指标：各方法首次达到该基准 Accuracy 所需通信轮次。
+    """
+    alphas = sorted(data.keys(), key=lambda x: float(x))
+
+    methods = ["FedAvg", "FedProx", "Proposed"]
+    labels = {
+        "FedAvg": "FedAvg",
+        "FedProx": "FedProx",
+        "Proposed": "FedLC-Ada"
+    }
+
+    markers = {
+        "FedAvg": "D",
+        "FedProx": "s",
+        "Proposed": "^"
+    }
+
+    colors = {
+        "FedAvg": "#7f83c6",
+        "FedProx": "#2dbb7f",
+        "Proposed": "#24b7c9"
+    }
+
+    x = [float(a) for a in alphas]
+    y_values = {m: [] for m in methods}
+
+    fixed_baseline_round = 80  # 固定 FedAvg 基准轮
+
+    for alpha in alphas:
+        rwth = data[alpha]["rwth"]
+
+        # FedAvg 第80轮准确率作为基准
+        fedavg_hist = rwth["FedAvg"]["hist"]
+        if len(fedavg_hist) >= fixed_baseline_round:
+            baseline_acc = fedavg_hist[fixed_baseline_round - 1]
+        else:
+            baseline_acc = rwth["FedAvg"]["acc"]
+
+        for m in methods:
+            if m == "FedAvg":
+                # FedAvg 直接固定显示为 80 轮
+                y_values[m].append(fixed_baseline_round)
+            else:
+                # 其他算法统计首次达到 FedAvg 第80轮准确率所需的轮次
+                round_num = get_rounds_to_baseline_from_hist(rwth[m], baseline_acc)
+                y_values[m].append(np.nan if round_num is None else round_num)
+
+    plt.figure(figsize=(8.5, 4.8))
+
+    for m in methods:
+        plt.plot(
+            x,
+            y_values[m],
+            marker=markers[m],
+            markersize=7,
+            linewidth=2.0,
+            color=colors[m],
+            label=labels[m]
+        )
+
+    plt.xlabel(r"$\alpha$", fontsize=13)
+    plt.ylabel("通信轮次", fontsize=13)
+    plt.xticks(x, [str(a) for a in alphas], fontsize=11)
+
+    valid_y = [
+        v for values in y_values.values()
+        for v in values
+        if v is not None and not np.isnan(v)
+    ]
+    plt.ylim(0, max(110, max(valid_y) + 10) if valid_y else 120)
+
+    plt.grid(axis="y", linestyle="--", alpha=0.35)
+
+    plt.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.18),
+        ncol=3,
+        frameon=True,
+        fancybox=False,
+        edgecolor="black"
+    )
+
+    plt.tight_layout()
+    plt.savefig("./results/plot_communication_efficiency_rwth.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
 if __name__ == "__main__":
     os.makedirs("./results", exist_ok=True)
     data = load_data()
@@ -281,12 +391,13 @@ if __name__ == "__main__":
     # 1. 经典性能对比柱状图
     plot_classic_bar(data, alpha="0.5")
 
-    # 2. 生成四大证明图表（强烈建议用 alpha=0.1 展示，对比最明显）
+    # 2. 生成四大证明图表
     target_alpha = "0.5"
     plot_heatmap(target_alpha)
     plot_histogram_and_coverage(target_alpha)
     plot_convergence(data, target_alpha)
     plot_degradation_and_advantage(data, target_alpha)
     plot_ablation_study(data,target_alpha)
+    plot_communication_efficiency(data)
 
     print("\n所有图表生成完毕，请检查 ./results 文件夹！")
