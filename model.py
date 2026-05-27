@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class SEBlock(nn.Module):
-    """特征注意力机制：自动增强关键流特征权重"""
+    """特征注意力机制"""
 
     def __init__(self, channels, reduction=16):
         super().__init__()
@@ -21,7 +21,7 @@ class SEBlock(nn.Module):
 
 
 class TrafficResNet(nn.Module):
-    """增强型残差全连接网络，防止深层网络欠拟合"""
+    """增强型残差全连接网络"""
 
     def __init__(self, input_dim, num_classes):
         super(TrafficResNet, self).__init__()
@@ -64,7 +64,7 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
     device = outputs.device
 
     # ---------------------------------------------------------
-    # 1. Logit Adjustment (LA) - 线性平滑退火
+    # 1. LA
     # ---------------------------------------------------------
     tau = current_round / total_rounds
 
@@ -99,33 +99,23 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
         local_freq = label_dist.to(device)
         norm_freq = local_freq / (local_freq.max() + 1e-8)
 
-        # 动态退火系数：随训练轮数增加，整体 Prox 约束从 1.0 降到 0.5
-        # 目的：训练后期允许模型进行微调，解决 metrics_8.json 中后期的震荡和停滞
         tau_t = 1.0 - 0.5 * (current_round / total_rounds)
 
         for (name, p), (_, g_p) in zip(model.named_parameters(), global_model.named_parameters()):
-            # 1. 针对分类头 (classifier.weight/bias)
+            # 分类头
             if use_decoupled_prox and 'classifier' in name:
-                # 核心：逆频率保护（防止少数类被擦除）
-                # 惩罚系数范围：少数类 ≈ 3*mu, 多数类 ≈ 1*mu
                 class_penalty = mu * (1.0 + 2.0 * (1.0 - norm_freq)) * tau_t
 
                 if 'weight' in name:
-                    # 针对 Linear 层的 Weight 形状处理
                     prox_loss += (class_penalty.view(-1, 1) * (p - g_p) ** 2).sum()
                 else:
                     prox_loss += (class_penalty * (p - g_p) ** 2).sum()
-
-            # 2. 针对 Backbone (日志中的 input_layer, res, se, proj 等)
             else:
-                # 改进点：对特征层使用更轻的约束 (0.1 * mu)
-                # 理由：特征提取层需要灵活性来适应 Non-IID 数据
+                # 特征层轻约束
                 prox_loss += (mu * 0.1 * tau_t) * (p - g_p).pow(2).sum()
 
     return task_loss + 0.5 * prox_loss
 
-
-# 为了兼容性保留 FedProx 实现作为对照
 def fedprox_loss(outputs, labels, model, global_model, mu=0.01):
     ce_loss = F.cross_entropy(outputs, labels)
     if global_model is None: return ce_loss

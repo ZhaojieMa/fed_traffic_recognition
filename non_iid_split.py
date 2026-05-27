@@ -3,11 +3,10 @@ import json
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
 
 
 def simple_dirichlet_split(y, num_clients, alpha=0.5):
-    """标准的 Dirichlet 划分（对照组使用）"""
+    """Dirichlet 划分"""
     num_classes = len(np.unique(y))
     client_data_idx = [[] for _ in range(num_clients)]
     for k in range(num_classes):
@@ -28,17 +27,11 @@ def simple_dirichlet_split(y, num_clients, alpha=0.5):
     return client_data_idx
 
 
-def realistic_traffic_split(y, num_clients, alpha=0.05, noise_ratio=0.15):
-    """
-    【学术级 RWTH 划分】
-    结合真实网络流量特征：客户端拥有少量“主导应用”(占绝大比例 85%)，
-    同时包含“背景流量/噪声”(占 15%，模拟 DNS/NTP/基础 HTTPS 等真实全局交互)。
-    既保持极端的 Non-IID 特性，又避免了 100% 绝对孤岛导致的联邦模型数学崩塌。
-    """
+def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
     num_samples = len(y)
     num_classes = len(np.unique(y))
 
-    # 1. 数量倾斜 (Lognormal) - 模拟活跃/非活跃用户的流量总数差异
+    # 1. 数量倾斜 (Lognormal)
     samples_per_client = np.random.lognormal(mean=3.0, sigma=1.2, size=num_clients)
     samples_per_client = (samples_per_client / samples_per_client.sum() * num_samples).astype(int)
     samples_per_client[np.argmax(samples_per_client)] += num_samples - samples_per_client.sum()
@@ -66,12 +59,10 @@ def realistic_traffic_split(y, num_clients, alpha=0.05, noise_ratio=0.15):
         client_data_idx[c].extend(indices_by_class[main_cls_2][:take_2])
         indices_by_class[main_cls_2] = indices_by_class[main_cls_2][take_2:]
 
-    # 3. 将所有剩余数据汇入全局背景池 (模拟互联网公共流量)
     for cls in range(num_classes):
         background_pool.extend(indices_by_class[cls])
     np.random.shuffle(background_pool)
 
-    # 4. 用背景池填补客户端的剩余额度 (noise_ratio 部分)
     current_idx = 0
     for c in range(num_clients):
         target_total = samples_per_client[c]
@@ -121,8 +112,19 @@ if __name__ == "__main__":
     for col in feature_cols: df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.fillna(0)
 
-    le = LabelEncoder()
-    df['label'] = le.fit_transform(df['label'].astype(str))
+    if pd.api.types.is_numeric_dtype(df['label']):
+        df['label'] = df['label'].astype(int)
+
+        unique_labels = sorted(df['label'].unique())
+        label_remap = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+
+        df['label'] = df['label'].map(label_remap).astype(int)
+        class_names = [str(old_label) for old_label in unique_labels]
+
+    else:
+        le = LabelEncoder()
+        df['label'] = le.fit_transform(df['label'].astype(str))
+        class_names = le.classes_.tolist()
 
     class_counts = df['label'].value_counts()
     test_samples_per_class = min(1500, max(class_counts.min() // 2, 50))
@@ -146,17 +148,16 @@ if __name__ == "__main__":
 
     print(f"测试集构建完成: 共 {len(test_df)} 条样本")
 
-    # === 2. 学术级更正：释放数据量潜力 ===
-    # RWTH 组：保持极端长尾，但提高总量，让头部应用可学习
-    TARGET_TOTAL = 150000
+    # RWTH 组
+    TARGET_TOTAL = 250000
     TOTAL_SAMPLES_TO_USE = min(TARGET_TOTAL, int(len(train_df) * 0.9))
-    ZIPF_ALPHA = 1.25  # 1.25 是网络流量服从 Zipf 定律的一个经典经验值
+    ZIPF_ALPHA = 1.25
 
     num_clients = 10
-    alphas = [0.5]
-    num_classes = len(le.classes_)
+    alphas = [0.1,0.3,0.5,0.7]
+    num_classes = len(class_names)
 
-    # Simple 组：作为基线上限，使用海量数据验证纯粹的 Dirichlet 偏移
+    # Simple 组
     TARGET_SIMPLE = 250000
     train_df_simple = train_df.sample(n=min(TARGET_SIMPLE, len(train_df)), random_state=42)
 
@@ -168,9 +169,8 @@ if __name__ == "__main__":
     for alpha in alphas:
         splits = {
             "simple": (train_df_simple, simple_dirichlet_split(train_df_simple['label'].values, num_clients, alpha)),
-            # 提升 noise_ratio 至 0.05，适度增加全局重合度，防止图结构完全断裂
             "rwth": (
-            train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, alpha, noise_ratio=0.05))
+            train_df_rwth, realistic_traffic_split(train_df_rwth['label'].values, num_clients, noise_ratio=0.05))
         }
 
         for split_type, (base_df, client_indices) in splits.items():
@@ -196,8 +196,8 @@ if __name__ == "__main__":
         json.dump({
             "input_dim": len(feature_cols),
             "num_classes": num_classes,
-            "classes": le.classes_.tolist(),
+            "classes": class_names,
             "total_training_samples": len(train_df_rwth)
         }, f)
 
-    print(f"数据划分成功！模式: Simple组 vs RWTH混合真实组(Zipf={ZIPF_ALPHA})")
+    print(f"数据划分成功！")
