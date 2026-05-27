@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 
 class SEBlock(nn.Module):
-    """特征注意力机制"""
 
     def __init__(self, channels, reduction=16):
         super().__init__()
@@ -21,7 +20,6 @@ class SEBlock(nn.Module):
 
 
 class TrafficResNet(nn.Module):
-    """增强型残差全连接网络"""
 
     def __init__(self, input_dim, num_classes):
         super(TrafficResNet, self).__init__()
@@ -37,7 +35,7 @@ class TrafficResNet(nn.Module):
 
         # 残差块 2
         self.res2 = nn.Linear(256, 128)
-        self.proj2 = nn.Linear(256, 128)  # 维度匹配
+        self.proj2 = nn.Linear(256, 128)
         self.se2 = SEBlock(128)
 
         self.classifier = nn.Linear(128, num_classes)

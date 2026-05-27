@@ -357,6 +357,71 @@ def plot_per_class_f1_comparison(data, alpha="0.5", split_type="rwth", output_di
     plt.close()
 
 
+def plot_macro_f1_summary(data, split_type="rwth", output_dir=None, alphas=None):
+    """
+    绘制四种 alpha 值下的 Macro-F1 对比图。
+    """
+    if output_dir is None:
+        output_dir = make_all_alpha_dir()
+    os.makedirs(output_dir, exist_ok=True)
+
+    if alphas is None:
+        alphas = sorted(data.keys(), key=lambda x: float(x))
+    else:
+        alphas = [str(alpha) for alpha in alphas]
+
+    method_keys = ["Local", "FedAvg", "FedProx", "Proposed", "Centralized"]
+    method_labels = ["Local", "FedAvg", "FedProx", "FedLC-Ada", "Centralized"]
+    colors = ['#C3D0DD', '#20CBEF', '#BCEFA0', '#F08A8C', '#54E8BA']
+
+    f1_values = {method: [] for method in method_keys}
+    for alpha in alphas:
+        split_data = data[alpha][split_type]
+        for method in method_keys:
+            f1_values[method].append(float(split_data[method]["f1"]))
+
+    x = np.arange(len(alphas))
+    width = min(0.15, 0.8 / len(method_keys))
+
+    plt.figure(figsize=(10, 6))
+
+    for i, (method, label) in enumerate(zip(method_keys, method_labels)):
+        offset = (i - (len(method_keys) - 1) / 2) * width
+        values = f1_values[method]
+        plt.bar(
+            x + offset,
+            values,
+            width,
+            label=label,
+            color=colors[i]
+        )
+
+        for j, value in enumerate(values):
+            plt.text(
+                x[j] + offset,
+                value + 0.01,
+                f"{value:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=8
+            )
+
+    plt.xticks(x, alphas, fontsize=11)
+    plt.xlabel(r"$\alpha$", fontsize=12)
+    plt.ylim(0, 1.10)
+    plt.ylabel("Macro-F1", fontsize=12)
+    plt.grid(axis="y", linestyle="--", alpha=0.45)
+    plt.legend(ncol=5, loc="upper center", bbox_to_anchor=(0.5, 1.15), frameon=True)
+
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(output_dir, f"plot_macro_f1_summary_{split_type}_all_alpha.png"),
+        dpi=300,
+        bbox_inches="tight"
+    )
+    plt.close()
+
+
 def get_rounds_to_baseline_from_hist(method_result, baseline_acc):
     hist = method_result.get("hist", [])
     hist_rounds = method_result.get("hist_rounds", [])
@@ -474,7 +539,7 @@ def generate_all_plots_for_alpha(data, alpha):
     plot_convergence(data, alpha, output_dir)
     plot_degradation_and_advantage(data, alpha, output_dir)
     plot_ablation_study(data, alpha, output_dir)
-    plot_per_class_f1_comparison(data, alpha, "simple", output_dir)
+    plot_per_class_f1_comparison(data, alpha, "rwth", output_dir)
 
     print(f"[完成] α={alpha} 的图表已保存到: {output_dir}")
 
@@ -490,5 +555,6 @@ if __name__ == "__main__":
 
     all_alpha_dir = make_all_alpha_dir()
     plot_communication_efficiency(data, all_alpha_dir)
+    plot_macro_f1_summary(data, "rwth", all_alpha_dir)
 
     print("\n所有图表生成完毕，请检查 ./results 文件夹！")
