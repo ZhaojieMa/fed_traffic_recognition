@@ -31,54 +31,43 @@ def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
     num_samples = len(y)
     num_classes = len(np.unique(y))
 
-    # 1. 数量倾斜 (Lognormal)
+    # 数量倾斜 (Lognormal)
     samples_per_client = np.random.lognormal(mean=3.0, sigma=1.2, size=num_clients)
     samples_per_client = (samples_per_client / samples_per_client.sum() * num_samples).astype(int)
     samples_per_client[np.argmax(samples_per_client)] += num_samples - samples_per_client.sum()
-
     indices_by_class = [np.where(y == i)[0].tolist() for i in range(num_classes)]
     for cls_list in indices_by_class: np.random.shuffle(cls_list)
-
     client_data_idx = [[] for _ in range(num_clients)]
     background_pool = []
 
-    # 2. 提取每个客户端的主导类 (占 1 - noise_ratio)
+    # 每个客户端主导类 (占 1 - noise_ratio)
     for c in range(num_clients):
         target_total = samples_per_client[c]
         target_main = int(target_total * (1.0 - noise_ratio))
-
         main_cls_1 = c % num_classes
         main_cls_2 = (c + 1) % num_classes
-
         take_1 = min(len(indices_by_class[main_cls_1]), int(target_main * 0.6))
         client_data_idx[c].extend(indices_by_class[main_cls_1][:take_1])
         indices_by_class[main_cls_1] = indices_by_class[main_cls_1][take_1:]
-
         take_2 = min(len(indices_by_class[main_cls_2]), target_main - take_1)
         client_data_idx[c].extend(indices_by_class[main_cls_2][:take_2])
         indices_by_class[main_cls_2] = indices_by_class[main_cls_2][take_2:]
-
     for cls in range(num_classes):
         background_pool.extend(indices_by_class[cls])
     np.random.shuffle(background_pool)
-
     current_idx = 0
     for c in range(num_clients):
         target_total = samples_per_client[c]
         current_len = len(client_data_idx[c])
         need = target_total - current_len
-
         if need > 0 and current_idx < len(background_pool):
             take_bg = min(need, len(background_pool) - current_idx)
             client_data_idx[c].extend(background_pool[current_idx : current_idx + take_bg])
             current_idx += take_bg
-
     while current_idx < len(background_pool):
         client_data_idx[np.random.randint(num_clients)].append(background_pool[current_idx])
         current_idx += 1
-
     return client_data_idx
-
 
 def make_global_long_tail(df, total_samples=10000, zipf_alpha=1.5):
     """Zipf 定律构造长尾"""
