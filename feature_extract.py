@@ -30,18 +30,14 @@ UNUSED_FEATURES = [
     # 流标识、地址、端口、链路层信息
     'id', 'src_ip', 'src_mac', 'src_oui', 'src_port',
     'dst_ip', 'dst_mac', 'dst_oui', 'dst_port',
-
-    # NFStream 的 DPI/应用识别结果，训练应用分类时会造成标签泄漏
+    # NFStream 的应用识别结果
     'application_name', 'application_category_name', 'category_name',
     'application_confidence', 'application_is_guessed',
     'requested_server_name', 'client_fingerprint', 'server_fingerprint',
     'user_agent', 'content_type',
-
     # 内部、协议或环境相关字段
     'expiration_id', 'ip_version', 'protocol',
     'vlan_id', 'tunnel_id', 'entry_type',
-
-    # SPLT 原始序列是 object/list 形态，不直接作为标量特征
     'splt_direction', 'splt_ps', 'splt_piat_ms'
 ]
 

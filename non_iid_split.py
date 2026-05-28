@@ -47,7 +47,6 @@ def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
         target_total = samples_per_client[c]
         target_main = int(target_total * (1.0 - noise_ratio))
 
-        # 每个客户端分配 2 个主导类别
         main_cls_1 = c % num_classes
         main_cls_2 = (c + 1) % num_classes
 
@@ -74,7 +73,6 @@ def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
             client_data_idx[c].extend(background_pool[current_idx : current_idx + take_bg])
             current_idx += take_bg
 
-    # 兜底：如果背景池还有剩余，随机散布给各客户端
     while current_idx < len(background_pool):
         client_data_idx[np.random.randint(num_clients)].append(background_pool[current_idx])
         current_idx += 1
@@ -83,7 +81,7 @@ def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
 
 
 def make_global_long_tail(df, total_samples=10000, zipf_alpha=1.5):
-    """使用 Zipf 定律构造全局长尾"""
+    """Zipf 定律构造长尾"""
     class_counts = df['label'].value_counts().sort_values(ascending=False)
     classes = class_counts.index.tolist()
     num_classes = len(classes)

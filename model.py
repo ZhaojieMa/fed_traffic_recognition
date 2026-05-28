@@ -61,9 +61,7 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
                    mu=0.01, gamma=2.0, use_la=True, use_focal=True, use_decoupled_prox=True):
     device = outputs.device
 
-    # ---------------------------------------------------------
     # 1. LA
-    # ---------------------------------------------------------
     tau = current_round / total_rounds
 
     if use_la:
@@ -73,9 +71,7 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
     else:
         adjusted_outputs = outputs
 
-    # ---------------------------------------------------------
     # 2. Focal Loss
-    # ---------------------------------------------------------
     if use_focal:
         with torch.no_grad():
             clean_probs = F.softmax(outputs, dim=1)
@@ -88,9 +84,7 @@ def fedlc_ada_loss(outputs, labels, model, global_model, label_dist, current_rou
     else:
         task_loss = F.cross_entropy(adjusted_outputs, labels)
 
-    # ---------------------------------------------------------
-    # 3. 解耦 Proximal Term
-    # ---------------------------------------------------------
+    # 3. 解耦近端
     prox_loss = 0.0
     if global_model is not None and mu > 0:
         device = outputs.device
