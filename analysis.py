@@ -134,21 +134,32 @@ def plot_convergence(data, alpha="0.5", output_dir=RESULTS_DIR):
     rounds = range(1, len(hist_simple_avg) + 1)
 
     # ================= 1. 绘制 Simple 组 ================
-    plt.plot(rounds, hist_simple_avg, ':', color='#3498db', linewidth=2.5, alpha=0.6, label="FedAvg (单纯 Dirichlet)")
-    plt.plot(rounds, hist_simple_prox, ':', color='#2ecc71', linewidth=2.5, alpha=0.6, label="FedProx (单纯 Dirichlet)")
+    plt.plot(rounds, hist_simple_avg, ':', color='#3498db', linewidth=2.5, alpha=0.6, label="FedAvg (Dirichlet)")
+    plt.plot(rounds, hist_simple_prox, ':', color='#2ecc71', linewidth=2.5, alpha=0.6, label="FedProx (Dirichlet)")
     plt.plot(rounds, hist_simple_prop, ':', color='#e74c3c', linewidth=2.5, alpha=0.6,
-             label="FedLC-Ada (单纯 Dirichlet)")
+             label="FedLC-Ada (Dirichlet)")
 
     # ================= 2. 绘制 RWTH 组 =================
-    plt.plot(rounds, hist_rwth_avg, '-', color='#2980b9', linewidth=2, label="FedAvg (极限 RWTH)")
-    plt.plot(rounds, hist_rwth_prox, '-', color='#27ae60', linewidth=2, label="FedProx (极限 RWTH)")
-    plt.plot(rounds, hist_rwth_prop, '-', color='#c0392b', linewidth=3.5, label="FedLC-Ada (极限 RWTH)")
+    plt.plot(rounds, hist_rwth_avg, '-', color='#2980b9', linewidth=2, label="FedAvg (RWTH)")
+    plt.plot(rounds, hist_rwth_prox, '-', color='#27ae60', linewidth=2, label="FedProx (RWTH)")
+    plt.plot(rounds, hist_rwth_prop, '-', color='#c0392b', linewidth=3.5, label="FedLC-Ada (RWTH)")
 
-    plt.xlabel("通信轮数 (Rounds)", fontsize=12)
-    plt.ylabel("全局测试集准确率 (Accuracy)", fontsize=12)
+    plt.xlabel("通信轮数 (Rounds)", fontsize=18)
+    plt.ylabel("全局测试集准确率 (Accuracy)", fontsize=18)
 
     # 使用双列图例，方便左右对比
-    plt.legend(loc='lower right', ncol=2, frameon=True, shadow=True, fontsize=10)
+    plt.legend(
+        loc='lower right',
+        ncol=2,
+        frameon=True,
+        shadow=True,
+        fontsize=20,
+        handlelength=2.8,
+        handletextpad=0.5,
+        columnspacing=1.5,
+        borderpad=0.5,
+        labelspacing=0.55
+    )
     plt.grid(True, linestyle='--', alpha=0.5)
 
     plt.tight_layout()

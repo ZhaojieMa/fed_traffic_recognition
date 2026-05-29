@@ -212,7 +212,7 @@ class TrafficClient(fl.client.NumPyClient):
 
         self.model.train()
         loader = DataLoader(TensorDataset(self.X_train, self.y_train), batch_size=BATCH_SIZE, shuffle=True,
-                            drop_last=True)
+                            drop_last=False)
 
         for _ in range(EPOCHS_PER_ROUND):
             for bx, by in loader:
@@ -341,11 +341,10 @@ def run_experiment(method, alpha, split_type="proposed"):
         per_class_f1_hist[str(cls_id)] = cls_hist
         per_class_f1_rounds[str(cls_id)] = cls_rounds
 
-    # 原逻辑：直接取最后一轮
     last_acc = acc_hist[-1]
     last_f1 = f1_hist[-1]
 
-    # 新逻辑：最后14轮去掉2个最大值和2个最小值后取平均
+    # 最后14轮去掉2个最大值和2个最小值后取平均
     final_acc = robust_tail_mean(acc_hist, tail_n=14, trim_n=2)
     final_f1 = robust_tail_mean(f1_hist, tail_n=14, trim_n=2)
 
@@ -377,7 +376,7 @@ def centralized_baseline(alpha, split_type="proposed"):
         all_y.append(y)
 
     loader = DataLoader(TensorDataset(torch.cat(all_x), torch.cat(all_y)), batch_size=BATCH_SIZE, shuffle=True,
-                        drop_last=True)
+                        drop_last=False)
     model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
@@ -404,7 +403,7 @@ def local_only_training(alpha, split_type="proposed"):
         model = TrafficResNet(INPUT_DIM, NUM_CLASSES).to(DEVICE)
         optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
-        loader = DataLoader(TensorDataset(X, y), batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+        loader = DataLoader(TensorDataset(X, y), batch_size=BATCH_SIZE, shuffle=True, drop_last=False)
         model.train()
         for _ in range(TOTAL_ROUNDS * EPOCHS_PER_ROUND):
             for bx, by in loader:
