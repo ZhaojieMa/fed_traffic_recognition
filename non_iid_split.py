@@ -40,7 +40,7 @@ def realistic_traffic_split(y, num_clients, noise_ratio=0.15):
     client_data_idx = [[] for _ in range(num_clients)]
     background_pool = []
 
-    # 每个客户端主导类 (占 1 - noise_ratio)
+    # 每个客户端主导类
     for c in range(num_clients):
         target_total = samples_per_client[c]
         target_main = int(target_total * (1.0 - noise_ratio))
